@@ -9,6 +9,13 @@ import {
     getGame,
     PlayerState,
 } from './gameState.js';
+import {
+    generateDayMessage,
+    isAIId,
+    logEvent,
+    pickVoteTarget,
+    runAINightAction,
+} from './aiPlayer.js';
 import { assignRoles, getRoleCard, getRoleDisplayName, getRoleEmoji } from './roles.js';
 import { checkWin } from './winCheck.js';
 import { Logger } from '../services/index.js';
@@ -51,6 +58,7 @@ export async function launchGame(game: GameState, client: Client): Promise<void>
 
     const mafiaIds = playerIds.filter(id => game.players[id].role === 'mafia');
     const mafiaNames = mafiaIds.map(id => game.players[id].name);
+    const realMafiaIds = mafiaIds.filter(id => !isAIId(id));
 
     // ── Create mafia secret channel ──────────────────────────────────────────
     try {
@@ -72,7 +80,7 @@ export async function launchGame(game: GameState, client: Client): Promise<void>
                         PermissionFlagsBits.ReadMessageHistory,
                     ],
                 },
-                ...mafiaIds.map(id => ({
+                ...realMafiaIds.map(id => ({
                     id,
                     allow: [
                         PermissionFlagsBits.ViewChannel,
@@ -109,9 +117,16 @@ export async function launchGame(game: GameState, client: Client): Promise<void>
 
     // ── DM role cards ────────────────────────────────────────────────────────
     for (const [id, player] of Object.entries(game.players)) {
+        if (player.isAI) continue; // AI players don't need DMs
         const teammates = mafiaIds.filter(mid => mid !== id).map(mid => game.players[mid].name);
         await sendDM(client, id, getRoleCard(player.role, teammates, id));
     }
+
+    // ── Log game start ───────────────────────────────────────────────────────
+    const allNames = Object.values(game.players)
+        .map(p => `${p.name}(${p.role})`)
+        .join(', ');
+    logEvent(game, `[Game Start] Players: ${allNames}`);
 
     // ── Announcement ─────────────────────────────────────────────────────────
     const gameChannel = (await client.channels
@@ -179,6 +194,7 @@ export async function startNightPhase(game: GameState, client: Client): Promise<
 
     // ── DM prompts ──────────────────────────────────────────────────────────
     for (const player of alivePlayers) {
+        if (player.isAI) continue; // AI handled by scheduler below
         if (player.role === 'mafia') {
             const mafiaTeam = alivePlayers
                 .filter(p => p.role === 'mafia' && p.id !== player.id)
@@ -237,6 +253,19 @@ export async function startNightPhase(game: GameState, client: Client): Promise<
                     )
             );
         }
+    }
+
+    // ── AI night actions ────────────────────────────────────────────────────
+    const aiNightPlayers = alivePlayers.filter(p => isAIId(p.id) && p.role !== 'civilian');
+    for (const aiPlayer of aiNightPlayers) {
+        const delay = Math.random() * 60_000 + 15_000; // 15–75 seconds
+        setTimeout(async () => {
+            const g = getGame(game.gameChannelId);
+            if (!g || g.phase !== 'night') return;
+            const p = g.players[aiPlayer.id];
+            if (!p || !p.alive) return;
+            await runAINightAction(g, p);
+        }, delay);
     }
 
     // ── 1-minute reminder ───────────────────────────────────────────────────
@@ -309,22 +338,39 @@ export async function resolveNight(game: GameState, client: Client): Promise<voi
         if (detective) {
             const target = game.players[investigateTarget];
             const isMafia = target?.role === 'mafia';
-            await sendDM(
-                client,
-                detective.id,
-                new EmbedBuilder()
-                    .setColor(isMafia ? 0x8b0000 : 0x00c851)
-                    .setTitle(`🔍 Investigation Result — Night ${game.round}`)
-                    .addFields({
-                        name: target?.name ?? 'Unknown',
-                        value: isMafia ? '🔫 **Mafia!**' : '✅ **Not Mafia**',
-                    })
+            logEvent(
+                game,
+                `[Night ${game.round}] Detective investigated ${target?.name ?? '?'}: ${isMafia ? 'MAFIA' : 'innocent'}`
             );
+            if (!detective.isAI) {
+                await sendDM(
+                    client,
+                    detective.id,
+                    new EmbedBuilder()
+                        .setColor(isMafia ? 0x8b0000 : 0x00c851)
+                        .setTitle(`🔍 Investigation Result — Night ${game.round}`)
+                        .addFields({
+                            name: target?.name ?? 'Unknown',
+                            value: isMafia ? '🔫 **Mafia!**' : '✅ **Not Mafia**',
+                        })
+                );
+            }
         }
     }
 
     game.lastNightDeath = killed?.id ?? null;
     game.lastNightSaved = saved;
+
+    if (saved) {
+        logEvent(
+            game,
+            `[Night ${game.round}] Doctor saved ${game.players[protectTarget!]?.name ?? '?'} from Mafia kill`
+        );
+    } else if (killed) {
+        logEvent(game, `[Night ${game.round}] ${killed.name} was killed by Mafia`);
+    } else {
+        logEvent(game, `[Night ${game.round}] No kill (no target chosen)`);
+    }
 
     const win = checkWin(game);
     if (win) {
@@ -379,6 +425,24 @@ export async function startDayPhase(game: GameState, client: Client): Promise<vo
 
     await channel.send({ embeds: [embed] });
 
+    // ── AI day messages ──────────────────────────────────────────────────────
+    const aiAlive = alivePlayers.filter(p => isAIId(p.id));
+    for (const aiPlayer of aiAlive) {
+        const msgCount = 1 + (Math.random() < 0.5 ? 1 : 0);
+        for (let i = 0; i < msgCount; i++) {
+            const delay = Math.random() * (DAY_MS * 0.6) + 8_000 + i * 40_000;
+            setTimeout(async () => {
+                const g = getGame(game.gameChannelId);
+                if (!g || g.phase !== 'day') return;
+                const p = g.players[aiPlayer.id];
+                if (!p || !p.alive) return;
+                const text = await generateDayMessage(g, p);
+                await channel.send(`**${p.name} 🤖:** ${text}`).catch(() => null);
+                logEvent(g, `[Day ${g.round}] ${p.name}: "${text.slice(0, 80)}"`);
+            }, delay);
+        }
+    }
+
     game.phaseTimer = setTimeout(async () => {
         const g = getGame(game.gameChannelId);
         if (!g || g.phase !== 'day') return;
@@ -412,6 +476,27 @@ export async function startVotePhase(game: GameState, client: Client): Promise<v
 
     const tallyMsg = await channel.send({ embeds: [embed] });
     game.tallyMessageId = tallyMsg.id;
+
+    // ── AI votes ─────────────────────────────────────────────────────────────
+    const aiAliveVote = alivePlayers.filter(p => isAIId(p.id));
+    for (const aiPlayer of aiAliveVote) {
+        const delay = Math.random() * 30_000 + 10_000; // 10–40 seconds
+        setTimeout(async () => {
+            const g = getGame(game.gameChannelId);
+            if (!g || g.phase !== 'vote') return;
+            const p = g.players[aiPlayer.id];
+            if (!p || !p.alive || g.vote.votes[p.id]) return;
+            const targetId = await pickVoteTarget(g, p);
+            if (!targetId) return;
+            g.vote.votes[p.id] = targetId;
+            logEvent(g, `[Vote] ${p.name} voted for ${g.players[targetId]?.name ?? targetId}`);
+            await updateVoteTally(g, client);
+            const allAlive = Object.values(g.players).filter(pp => pp.alive);
+            if (allAlive.every(pp => g.vote.votes[pp.id] !== undefined)) {
+                await resolveVote(g, client);
+            }
+        }, delay);
+    }
 
     // ── 1-minute warning ─────────────────────────────────────────────────────
     game.reminderTimer = setTimeout(async () => {

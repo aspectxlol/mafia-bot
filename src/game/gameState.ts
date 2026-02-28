@@ -6,6 +6,7 @@ export interface PlayerState {
     name: string;
     role: Role;
     alive: boolean;
+    isAI: boolean;
     protectedLastNight: boolean;
     lastProtectedId: string | null; // id of player protected last night
     selfProtectUsed: boolean;
@@ -42,6 +43,7 @@ export interface GameState {
     tallyMessageId: string | null;
     lastNightDeath: string | null; // userId of player killed last night
     lastNightSaved: boolean; // true if doctor prevented a kill
+    gameLog: string[]; // event log for AI context
 }
 
 let gameCounter = 0;

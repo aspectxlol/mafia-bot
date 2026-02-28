@@ -19,6 +19,7 @@ import {
     PlayerState,
     setGame,
 } from '../../game/gameState.js';
+import { AI_NAMES, newAIId } from '../../game/aiPlayer.js';
 import { buildRoleListText } from '../../game/roles.js';
 import { Language } from '../../models/enum-helpers/index.js';
 import { EventData } from '../../models/internal-models.js';
@@ -45,6 +46,7 @@ export class StartCommand implements Command {
         }
 
         // Collect players: host + up to 7 mentions
+        const aiCount = intr.options.getInteger('ai', false) ?? 0;
         const mentioned: User[] = [];
         for (let i = 1; i <= 7; i++) {
             const u = intr.options.getUser(`player${i}`, false);
@@ -61,10 +63,10 @@ export class StartCommand implements Command {
             }
         }
 
-        if (uniqueUsers.length < 5 || uniqueUsers.length > 8) {
+        const totalPlayers = uniqueUsers.length + aiCount;
+        if (totalPlayers < 5 || totalPlayers > 8) {
             await intr.editReply(
-                `❌ Need **5–8 players** total (you + mentions). Got **${uniqueUsers.length}**.\n` +
-                    `Include ${4 - mentioned.length >= 0 ? Math.max(0, 4 - mentioned.length) : 0}–${7 - mentioned.length} more players.`
+                `❌ Need **5–8 players** total (you + mentions + AI bots). Got **${totalPlayers}**.`
             );
             return;
         }
@@ -130,6 +132,23 @@ export class StartCommand implements Command {
                 name: member?.displayName ?? u.username,
                 role: 'civilian', // placeholder
                 alive: true,
+                isAI: false,
+                protectedLastNight: false,
+                lastProtectedId: null,
+                selfProtectUsed: false,
+            };
+        }
+
+        // ── Add AI players ─────────────────────────────────────────────────────
+        const shuffledAINames = [...AI_NAMES].sort(() => Math.random() - 0.5);
+        for (let i = 0; i < aiCount; i++) {
+            const aiId = newAIId(gameNumber, i + 1);
+            players[aiId] = {
+                id: aiId,
+                name: shuffledAINames[i % shuffledAINames.length],
+                role: 'civilian', // placeholder
+                alive: true,
+                isAI: true,
                 protectedLastNight: false,
                 lastProtectedId: null,
                 selfProtectUsed: false,
@@ -161,12 +180,23 @@ export class StartCommand implements Command {
             tallyMessageId: null,
             lastNightDeath: null,
             lastNightSaved: false,
+            gameLog: [],
         };
 
         setGame(gameChannel.id, gameState);
 
+        // Pre-ready all AI players (they don't need to click Ready)
+        for (let i = 0; i < aiCount; i++) {
+            gameState.readyPlayers.add(newAIId(gameNumber, i + 1));
+        }
+
         // ── Post lobby embed with Ready button ─────────────────────────────────
-        const playerList = uniqueUsers.map(u => `<@${u.id}>`).join(', ');
+        const realList = uniqueUsers.map(u => `<@${u.id}>`).join(', ');
+        const aiList = Object.values(players)
+            .filter(p => p.isAI)
+            .map(p => `${p.name} 🤖`)
+            .join(', ');
+        const playerList = [realList, aiList].filter(Boolean).join(', ');
         const roleList = buildRoleListText(gameState);
 
         const embed = new EmbedBuilder()
@@ -174,7 +204,7 @@ export class StartCommand implements Command {
             .setTitle(`🎭 Mafia Game #${gameNumber} — Lobby`)
             .setDescription(
                 `Welcome! A social deduction game of **Town vs Mafia**.\n\n` +
-                    `**Players (${uniqueUsers.length}):** ${playerList}\n\n` +
+                    `**Players (${totalPlayers}):** ${playerList}\n\n` +
                     `**Roles in this game:**\n${roleList}\n\n` +
                     `**Quick Rules:**\n` +
                     `🌙 **Night** — Mafia kills. Detective investigates. Doctor protects.\n` +
@@ -198,7 +228,9 @@ export class StartCommand implements Command {
         const readyMsg = await gameChannel.send({ embeds: [embed], components: [readyRow] });
         gameState.readyMessageId = readyMsg.id;
 
-        await gameChannel.send(`**Ready: 0 / ${uniqueUsers.length}**`);
+        const aiReadyNote =
+            aiCount > 0 ? ` (${aiCount} AI player${aiCount > 1 ? 's' : ''} auto-ready)` : '';
+        await gameChannel.send(`**Ready: 0 / ${uniqueUsers.length}**${aiReadyNote}`);
 
         // ── 5-minute force-start timer ─────────────────────────────────────────
         gameState.phaseTimer = setTimeout(

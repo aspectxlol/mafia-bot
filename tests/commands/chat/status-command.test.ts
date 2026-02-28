@@ -39,6 +39,7 @@ function makePlayer(id: string, role: PlayerState['role'], alive = true): Player
         name: `P_${id}`,
         role,
         alive,
+        isAI: false,
         protectedLastNight: false,
         lastProtectedId: null,
         selfProtectUsed: false,
@@ -68,6 +69,7 @@ function makeGame(channelId: string, overrides: Partial<GameState> = {}): GameSt
         tallyMessageId: null,
         lastNightDeath: null,
         lastNightSaved: false,
+        gameLog: [],
         ...overrides,
     };
 }

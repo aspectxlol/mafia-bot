@@ -16,6 +16,7 @@ function makePlayer(id: string, role: PlayerState['role'], alive = true): Player
         name: `Player${id}`,
         role,
         alive,
+        isAI: false,
         protectedLastNight: false,
         lastProtectedId: null,
         selfProtectUsed: false,
@@ -42,6 +43,7 @@ function makeGame(players: Record<string, PlayerState>): GameState {
         tallyMessageId: null,
         lastNightDeath: null,
         lastNightSaved: false,
+        gameLog: [],
     };
 }
 

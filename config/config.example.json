@@ -1,4 +1,5 @@
 {
+    "geminiApiKey": "YOUR_GEMINI_API_KEY",
     "developers": ["<YOUR_DISCORD_ID>"],
     "client": {
         "id": "<DISCORD_BOT_ID>",

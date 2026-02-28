@@ -38,13 +38,14 @@ export const ChatCommandMetadata: {
         dm_permission: false,
         default_member_permissions: undefined,
         options: [
-            Args.player(1, true),
-            Args.player(2, true),
-            Args.player(3, true),
-            Args.player(4, true),
+            Args.player(1, false),
+            Args.player(2, false),
+            Args.player(3, false),
+            Args.player(4, false),
             Args.player(5, false),
             Args.player(6, false),
             Args.player(7, false),
+            { ...Args.AI_COUNT, required: false },
         ],
     },
     KILL: {

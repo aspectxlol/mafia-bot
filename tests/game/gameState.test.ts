@@ -27,6 +27,7 @@ function makePlayer(id: string, overrides: Partial<PlayerState> = {}): PlayerSta
         alive: true,
         protectedLastNight: false,
         lastProtectedId: null,
+        isAI: false,
         selfProtectUsed: false,
         ...overrides,
     };
@@ -52,6 +53,7 @@ function makeGame(channelId: string, overrides: Partial<GameState> = {}): GameSt
         tallyMessageId: null,
         lastNightDeath: null,
         lastNightSaved: false,
+        gameLog: [],
         ...overrides,
     };
 }
