@@ -1,0 +1,229 @@
+import {
+    ActionRowBuilder,
+    ButtonBuilder,
+    ButtonStyle,
+    ChannelType,
+    ChatInputCommandInteraction,
+    EmbedBuilder,
+    PermissionFlagsBits,
+    PermissionsString,
+    TextChannel,
+    User,
+} from 'discord.js';
+
+import {
+    GameState,
+    getGame,
+    getGameByUser,
+    getNextGameNumber,
+    PlayerState,
+    setGame,
+} from '../../game/gameState.js';
+import { buildRoleListText } from '../../game/roles.js';
+import { Language } from '../../models/enum-helpers/index.js';
+import { EventData } from '../../models/internal-models.js';
+import { Lang } from '../../services/index.js';
+import { Command, CommandDeferType } from '../index.js';
+
+export class StartCommand implements Command {
+    public names = [Lang.getRef('chatCommands.start', Language.Default)];
+    public deferType = CommandDeferType.PUBLIC;
+    public requireClientPerms: PermissionsString[] = ['ManageChannels', 'ManageRoles'];
+
+    public async execute(intr: ChatInputCommandInteraction, _data: EventData): Promise<void> {
+        if (!intr.guild) {
+            await intr.editReply('❌ This command must be used in a server.');
+            return;
+        }
+
+        // Check if host already in a game
+        if (getGameByUser(intr.user.id)) {
+            await intr.editReply(
+                '❌ You are already in an active game! Use `/end` to cancel it first.'
+            );
+            return;
+        }
+
+        // Collect players: host + up to 7 mentions
+        const mentioned: User[] = [];
+        for (let i = 1; i <= 7; i++) {
+            const u = intr.options.getUser(`player${i}`, false);
+            if (u) mentioned.push(u);
+        }
+
+        // Deduplicate (host auto-included)
+        const seen = new Set<string>();
+        const uniqueUsers: User[] = [];
+        for (const u of [intr.user, ...mentioned]) {
+            if (!seen.has(u.id)) {
+                seen.add(u.id);
+                uniqueUsers.push(u);
+            }
+        }
+
+        if (uniqueUsers.length < 5 || uniqueUsers.length > 8) {
+            await intr.editReply(
+                `❌ Need **5–8 players** total (you + mentions). Got **${uniqueUsers.length}**.\n` +
+                    `Include ${4 - mentioned.length >= 0 ? Math.max(0, 4 - mentioned.length) : 0}–${7 - mentioned.length} more players.`
+            );
+            return;
+        }
+
+        if (uniqueUsers.some(u => u.bot)) {
+            await intr.editReply('❌ Bot accounts cannot play Mafia.');
+            return;
+        }
+
+        const gameNumber = getNextGameNumber();
+
+        // ── Create game channel ────────────────────────────────────────────────
+        let gameChannel: TextChannel;
+        try {
+            gameChannel = await intr.guild.channels.create({
+                name: `mafia-game-${gameNumber}`,
+                type: ChannelType.GuildText,
+                topic: `Mafia Game #${gameNumber} | Phase: Lobby`,
+                permissionOverwrites: [
+                    {
+                        id: intr.guild.roles.everyone.id,
+                        allow: [
+                            PermissionFlagsBits.ViewChannel,
+                            PermissionFlagsBits.ReadMessageHistory,
+                        ],
+                        deny: [PermissionFlagsBits.SendMessages, PermissionFlagsBits.AddReactions],
+                    },
+                    {
+                        id: intr.client.user.id,
+                        allow: [
+                            PermissionFlagsBits.ViewChannel,
+                            PermissionFlagsBits.SendMessages,
+                            PermissionFlagsBits.ManageMessages,
+                            PermissionFlagsBits.ManageChannels,
+                            PermissionFlagsBits.ReadMessageHistory,
+                            PermissionFlagsBits.AddReactions,
+                        ],
+                    },
+                    ...uniqueUsers.map(u => ({
+                        id: u.id,
+                        allow: [
+                            PermissionFlagsBits.ViewChannel,
+                            PermissionFlagsBits.SendMessages,
+                            PermissionFlagsBits.ReadMessageHistory,
+                            PermissionFlagsBits.AddReactions,
+                        ],
+                    })),
+                ],
+            });
+        } catch {
+            await intr.editReply(
+                '❌ Failed to create game channel. Make sure I have **Manage Channels** and **Manage Roles** permissions.'
+            );
+            return;
+        }
+
+        // ── Build initial player state ─────────────────────────────────────────
+        const players: Record<string, PlayerState> = {};
+        for (const u of uniqueUsers) {
+            const member = await intr.guild.members.fetch(u.id).catch(() => null);
+            players[u.id] = {
+                id: u.id,
+                name: member?.displayName ?? u.username,
+                role: 'civilian', // placeholder
+                alive: true,
+                protectedLastNight: false,
+                lastProtectedId: null,
+                selfProtectUsed: false,
+            };
+        }
+
+        // ── Build game state ───────────────────────────────────────────────────
+        const gameState: GameState = {
+            phase: 'lobby',
+            gameNumber,
+            hostId: intr.user.id,
+            guildId: intr.guild.id,
+            players,
+            readyPlayers: new Set<string>(),
+            night: {
+                killTarget: null,
+                protectTarget: null,
+                investigateTarget: null,
+                actionsReceived: [],
+            },
+            vote: { votes: {}, tally: {} },
+            mafiaChannelId: null,
+            gameChannelId: gameChannel.id,
+            round: 1,
+            phaseTimer: null,
+            reminderTimer: null,
+            readyTimerFired: false,
+            readyMessageId: null,
+            tallyMessageId: null,
+            lastNightDeath: null,
+            lastNightSaved: false,
+        };
+
+        setGame(gameChannel.id, gameState);
+
+        // ── Post lobby embed with Ready button ─────────────────────────────────
+        const playerList = uniqueUsers.map(u => `<@${u.id}>`).join(', ');
+        const roleList = buildRoleListText(gameState);
+
+        const embed = new EmbedBuilder()
+            .setColor(0x7b2dff)
+            .setTitle(`🎭 Mafia Game #${gameNumber} — Lobby`)
+            .setDescription(
+                `Welcome! A social deduction game of **Town vs Mafia**.\n\n` +
+                    `**Players (${uniqueUsers.length}):** ${playerList}\n\n` +
+                    `**Roles in this game:**\n${roleList}\n\n` +
+                    `**Quick Rules:**\n` +
+                    `🌙 **Night** — Mafia kills. Detective investigates. Doctor protects.\n` +
+                    `☀️ **Day** — Discuss for 5 minutes.\n` +
+                    `🗳️ **Vote** — Use \`/vote @player\` to eliminate someone.\n\n` +
+                    `🏆 Town wins when all Mafia are dead.\n` +
+                    `🏆 Mafia wins when they equal or outnumber the Town.\n\n` +
+                    `**Click ✅ Ready when you're set to go!**`
+            )
+            .setFooter({
+                text: 'Host gets a Force Start button after 5 minutes if not all ready.',
+            });
+
+        const readyRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder()
+                .setCustomId(`ready:${gameChannel.id}`)
+                .setLabel('✅  Ready!')
+                .setStyle(ButtonStyle.Success)
+        );
+
+        const readyMsg = await gameChannel.send({ embeds: [embed], components: [readyRow] });
+        gameState.readyMessageId = readyMsg.id;
+
+        await gameChannel.send(`**Ready: 0 / ${uniqueUsers.length}**`);
+
+        // ── 5-minute force-start timer ─────────────────────────────────────────
+        gameState.phaseTimer = setTimeout(
+            async () => {
+                const g = getGame(gameChannel.id);
+                if (!g || g.phase !== 'lobby') return;
+                g.readyTimerFired = true;
+
+                const forceRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+                    new ButtonBuilder()
+                        .setCustomId(`forcestart:${gameChannel.id}`)
+                        .setLabel('⚡ Force Start')
+                        .setStyle(ButtonStyle.Danger)
+                );
+
+                await gameChannel.send({
+                    content: `<@${intr.user.id}> Not all players are ready after 5 minutes. Click below to force start (unready players will be removed).`,
+                    components: [forceRow],
+                });
+            },
+            5 * 60 * 1000
+        );
+
+        await intr.editReply(
+            `✅ Game channel created: ${gameChannel}. Head over to start the game!`
+        );
+    }
+}

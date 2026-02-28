@@ -2,8 +2,18 @@ import { REST } from '@discordjs/rest';
 import { Options, Partials } from 'discord.js';
 import { createRequire } from 'node:module';
 
-import { Button } from './buttons/index.js';
-import { HelpCommand, InfoCommand } from './commands/chat/index.js';
+import { Button, ReadyButton } from './buttons/index.js';
+import {
+    EndCommand,
+    HelpCommand,
+    InfoCommand,
+    InvestigateCommand,
+    KillCommand,
+    ProtectCommand,
+    StartCommand,
+    StatusCommand,
+    VoteCommand,
+} from './commands/chat/index.js';
 import {
     ChatCommandMetadata,
     Command,
@@ -58,11 +68,21 @@ async function start(): Promise<void> {
         new HelpCommand(),
         new InfoCommand(),
 
+        // Mafia game commands
+        new StartCommand(),
+        new KillCommand(),
+        new InvestigateCommand(),
+        new ProtectCommand(),
+        new VoteCommand(),
+        new StatusCommand(),
+        new EndCommand(),
+
         // TODO: Add new commands here
     ];
 
     // Buttons
     let buttons: Button[] = [
+        new ReadyButton(),
         // TODO: Add new buttons here
     ];
 

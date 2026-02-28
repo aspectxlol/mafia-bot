@@ -192,7 +192,14 @@
             "dev": "dev",
             "help": "help",
             "info": "info",
-            "test": "test"
+            "test": "test",
+            "start": "start",
+            "kill": "kill",
+            "investigate": "investigate",
+            "protect": "protect",
+            "vote": "vote",
+            "status": "status",
+            "end": "end"
         },
         "userCommands": {
             "viewDateJoined": "View Date Joined"
@@ -208,18 +215,34 @@
             "dev": "Developer use only.",
             "help": "Find help or contact support.",
             "info": "View bot info.",
-            "test": "Run the test command."
+            "test": "Run the test command.",
+            "start": "Start a new Mafia game (host + 4-7 players).",
+            "kill": "[Mafia] Choose your kill target for tonight.",
+            "investigate": "[Detective] Investigate a player via DM.",
+            "protect": "[Doctor] Protect a player tonight via DM.",
+            "vote": "Vote to eliminate a player during the day.",
+            "status": "Show the current game status.",
+            "end": "[Host] Force end the current game."
         },
         "argDescs": {
             "devCommand": "Command.",
             "helpOption": "Option.",
-            "infoOption": "Option."
+            "infoOption": "Option.",
+            "target": "The player to target.",
+            "player1": "Player 1 to include in the game.",
+            "player2": "Player 2 to include in the game.",
+            "player3": "Player 3 to include in the game.",
+            "player4": "Player 4 to include in the game.",
+            "player5": "Player 5 to include (optional).",
+            "player6": "Player 6 to include (optional).",
+            "player7": "Player 7 to include (optional)."
         },
         "fields": {
             "commands": "Commands",
             "links": "Links"
         },
         "permissions": {
+            "BypassSlowmode": "Bypass Slowmode",
             "AddReactions": "Add Reactions",
             "Administrator": "Administrator",
             "AttachFiles": "Attach Files",

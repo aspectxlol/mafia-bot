@@ -9,6 +9,7 @@
         "rootDir": "./src",
         "strict": false,
         "moduleResolution": "node",
+        "ignoreDeprecations": "5.0",
         "esModuleInterop": true,
         "experimentalDecorators": true,
         "emitDecoratorMetadata": true,

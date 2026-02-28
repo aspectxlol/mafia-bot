@@ -41,6 +41,70 @@ export const ChatCommandMetadata: {
             },
         ],
     },
+
+    // ── Mafia game commands ─────────────────────────────────────────────────
+    START: {
+        type: ApplicationCommandType.ChatInput,
+        name: Lang.getRef('chatCommands.start', Language.Default),
+        description: Lang.getRef('commandDescs.start', Language.Default),
+        dm_permission: false,
+        default_member_permissions: undefined,
+        options: [
+            Args.player(1, true),
+            Args.player(2, true),
+            Args.player(3, true),
+            Args.player(4, true),
+            Args.player(5, false),
+            Args.player(6, false),
+            Args.player(7, false),
+        ],
+    },
+    KILL: {
+        type: ApplicationCommandType.ChatInput,
+        name: Lang.getRef('chatCommands.kill', Language.Default),
+        description: Lang.getRef('commandDescs.kill', Language.Default),
+        dm_permission: false,
+        default_member_permissions: undefined,
+        options: [{ ...Args.TARGET_USER, required: true }],
+    },
+    INVESTIGATE: {
+        type: ApplicationCommandType.ChatInput,
+        name: Lang.getRef('chatCommands.investigate', Language.Default),
+        description: Lang.getRef('commandDescs.investigate', Language.Default),
+        dm_permission: true,
+        default_member_permissions: undefined,
+        options: [{ ...Args.TARGET_USER, required: true }],
+    },
+    PROTECT: {
+        type: ApplicationCommandType.ChatInput,
+        name: Lang.getRef('chatCommands.protect', Language.Default),
+        description: Lang.getRef('commandDescs.protect', Language.Default),
+        dm_permission: true,
+        default_member_permissions: undefined,
+        options: [{ ...Args.TARGET_USER, required: true }],
+    },
+    VOTE: {
+        type: ApplicationCommandType.ChatInput,
+        name: Lang.getRef('chatCommands.vote', Language.Default),
+        description: Lang.getRef('commandDescs.vote', Language.Default),
+        dm_permission: false,
+        default_member_permissions: undefined,
+        options: [{ ...Args.TARGET_USER, required: true }],
+    },
+    STATUS: {
+        type: ApplicationCommandType.ChatInput,
+        name: Lang.getRef('chatCommands.status', Language.Default),
+        description: Lang.getRef('commandDescs.status', Language.Default),
+        dm_permission: true,
+        default_member_permissions: undefined,
+    },
+    END: {
+        type: ApplicationCommandType.ChatInput,
+        name: Lang.getRef('chatCommands.end', Language.Default),
+        description: Lang.getRef('commandDescs.end', Language.Default),
+        dm_permission: true,
+        default_member_permissions: undefined,
+    },
 };
 
 export const MessageCommandMetadata: {

@@ -81,6 +81,8 @@ export class ButtonHandler implements EventHandler {
     }
 
     private findButton(id: string): Button {
-        return this.buttons.find(button => button.ids.includes(id));
+        return this.buttons.find(button =>
+            button.ids.some(bid => id === bid || id.startsWith(bid + ':'))
+        );
     }
 }

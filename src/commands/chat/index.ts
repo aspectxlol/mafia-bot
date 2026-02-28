@@ -1,2 +1,9 @@
 export { HelpCommand } from './help-command.js';
 export { InfoCommand } from './info-command.js';
+export { StartCommand } from './start-command.js';
+export { KillCommand } from './kill-command.js';
+export { InvestigateCommand } from './investigate-command.js';
+export { ProtectCommand } from './protect-command.js';
+export { VoteCommand } from './vote-command.js';
+export { StatusCommand } from './status-command.js';
+export { EndCommand } from './end-command.js';
