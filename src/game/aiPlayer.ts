@@ -88,16 +88,63 @@ function buildContext(game: GameState, player: PlayerState): string {
     return lines.filter(l => l !== '').join('\n');
 }
 
-async function ask(context: string, task: string): Promise<string> {
-    try {
-        const model = getGemini().getGenerativeModel({ model: 'gemini-2.0-flash' });
-        const prompt = `${context}\n\nTASK: ${task}\n\nRespond with ONLY what is asked. No extra explanation.`;
-        const result = await model.generateContent(prompt);
-        return result.response.text().trim();
-    } catch (err) {
-        Logger.error('Gemini error', err);
-        return '';
+/** Parse the retry-after delay (in ms) from a Gemini 429 error, defaulting to 60 s. */
+function parseRetryDelay(err: unknown): number {
+    if (err && typeof err === 'object') {
+        // SDK attaches errorDetails array on the error object
+        const details = (err as Record<string, unknown>).errorDetails;
+        if (Array.isArray(details)) {
+            for (const detail of details) {
+                if (
+                    detail &&
+                    typeof detail === 'object' &&
+                    (detail as Record<string, unknown>)['@type'] ===
+                        'type.googleapis.com/google.rpc.RetryInfo'
+                ) {
+                    const raw = (detail as Record<string, unknown>).retryDelay;
+                    if (typeof raw === 'string') {
+                        // Format is e.g. "54s" or "54.362714374s"
+                        const seconds = parseFloat(raw);
+                        if (!isNaN(seconds)) return Math.ceil(seconds) * 1000;
+                    }
+                }
+            }
+        }
+        // Fallback: parse from message string "Please retry in N s."
+        const msg = (err as Record<string, unknown>).message;
+        if (typeof msg === 'string') {
+            const m = msg.match(/retry in ([\d.]+)s/i);
+            if (m) return Math.ceil(parseFloat(m[1])) * 1000;
+        }
     }
+    return 60_000; // conservative default
+}
+
+const MAX_RETRIES = 3;
+
+async function ask(context: string, task: string): Promise<string> {
+    const model = getGemini().getGenerativeModel({ model: 'gemini-2.0-flash' });
+    const prompt = `${context}\n\nTASK: ${task}\n\nRespond with ONLY what is asked. No extra explanation.`;
+
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        try {
+            const result = await model.generateContent(prompt);
+            return result.response.text().trim();
+        } catch (err) {
+            const status = (err as Record<string, unknown>).status;
+            if (status === 429 && attempt < MAX_RETRIES) {
+                const delay = parseRetryDelay(err);
+                Logger.warn(
+                    `Gemini rate-limited (attempt ${attempt}/${MAX_RETRIES}). Retrying in ${delay / 1000}s…`
+                );
+                await new Promise(res => setTimeout(res, delay));
+                continue;
+            }
+            Logger.error('Gemini error', err);
+            return '';
+        }
+    }
+    return '';
 }
 
 function pickFromList<T extends { name: string }>(raw: string, candidates: T[]): T {

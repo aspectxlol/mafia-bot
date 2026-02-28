@@ -35,6 +35,7 @@ import {
     GameState,
     PlayerState,
 } from '../../src/game/gameState.js';
+import { Logger } from '../../src/services/index.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -430,6 +431,155 @@ describe('runAINightAction – Gemini errors', () => {
         // actionsReceived may or may not be updated depending on fallback path;
         // the key thing is no unhandled exception
         expect(game.night.killTarget).not.toBeNull();
+    });
+});
+
+// ─── Retry / rate-limit logic ────────────────────────────────────────────────
+
+/** Build a fake 429 error matching the Google SDK's shape. */
+function make429(retryDelay = '10s') {
+    return Object.assign(new Error('rate limited'), {
+        status: 429,
+        statusText: 'Too Many Requests',
+        errorDetails: [
+            {
+                '@type': 'type.googleapis.com/google.rpc.RetryInfo',
+                retryDelay,
+            },
+        ],
+    });
+}
+
+describe('retry logic (rate-limit)', () => {
+    beforeEach(() => {
+        vi.useFakeTimers();
+    });
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it('retries after a 429 and returns the eventual response', async () => {
+        const game = makeGame();
+        mockGenerateContent
+            .mockRejectedValueOnce(make429('5s'))
+            .mockResolvedValueOnce({ response: { text: () => 'Dave' } });
+
+        const promise = runAINightAction(game, game.players['m1']);
+        await vi.runAllTimersAsync();
+        await promise;
+
+        expect(game.night.killTarget).not.toBeNull();
+        expect(game.night.actionsReceived).toContain('kill');
+        expect(mockGenerateContent).toHaveBeenCalledTimes(2);
+    });
+
+    it('logs a warn (not error) on 429 retry', async () => {
+        const game = makeGame();
+        mockGenerateContent
+            .mockRejectedValueOnce(make429('5s'))
+            .mockResolvedValueOnce({ response: { text: () => 'Dave' } });
+
+        const promise = runAINightAction(game, game.players['m1']);
+        await vi.runAllTimersAsync();
+        await promise;
+
+        expect(vi.mocked(Logger.warn)).toHaveBeenCalledWith(
+            expect.stringContaining('rate-limited'),
+            expect.anything()
+        );
+        expect(vi.mocked(Logger.error)).not.toHaveBeenCalled();
+    });
+
+    it('waits the retry delay from errorDetails', async () => {
+        const game = makeGame();
+        const advanceSpy = vi.spyOn(global, 'setTimeout');
+        mockGenerateContent
+            .mockRejectedValueOnce(make429('30s'))
+            .mockResolvedValueOnce({ response: { text: () => 'Dave' } });
+
+        const promise = runAINightAction(game, game.players['m1']);
+        await vi.runAllTimersAsync();
+        await promise;
+
+        // At least one setTimeout call should have delay >= 30_000 ms
+        const delays = advanceSpy.mock.calls.map(c => c[1] as number);
+        expect(delays.some(d => d >= 30_000)).toBe(true);
+    });
+
+    it('parses retryDelay from the error message as fallback', async () => {
+        const game = makeGame();
+        // Error with no errorDetails but message contains retry hint
+        const err = Object.assign(new Error('Please retry in 20s.'), { status: 429 });
+        mockGenerateContent
+            .mockRejectedValueOnce(err)
+            .mockResolvedValueOnce({ response: { text: () => 'Dave' } });
+
+        const advanceSpy = vi.spyOn(global, 'setTimeout');
+        const promise = runAINightAction(game, game.players['m1']);
+        await vi.runAllTimersAsync();
+        await promise;
+
+        const delays = advanceSpy.mock.calls.map(c => c[1] as number);
+        expect(delays.some(d => d >= 20_000)).toBe(true);
+    });
+
+    it('exhausts all retries and falls back to empty / random', async () => {
+        const game = makeGame();
+        mockGenerateContent
+            .mockRejectedValueOnce(make429('1s'))
+            .mockRejectedValueOnce(make429('1s'))
+            .mockRejectedValueOnce(make429('1s'));
+
+        const promise = runAINightAction(game, game.players['m1']);
+        await vi.runAllTimersAsync();
+        await promise;
+
+        // After 3 failures, ask() returns '' and pickFromList falls back to random
+        expect(game.night.killTarget).not.toBeNull();
+        expect(mockGenerateContent).toHaveBeenCalledTimes(3);
+        // Final failure should be logged as error
+        expect(vi.mocked(Logger.error)).toHaveBeenCalled();
+    });
+
+    it('does not retry on non-429 errors', async () => {
+        const game = makeGame();
+        const err = Object.assign(new Error('Internal server error'), { status: 500 });
+        mockGenerateContent.mockRejectedValueOnce(err);
+
+        const promise = runAINightAction(game, game.players['m1']);
+        await vi.runAllTimersAsync();
+        await promise;
+
+        expect(mockGenerateContent).toHaveBeenCalledTimes(1);
+        expect(vi.mocked(Logger.error)).toHaveBeenCalled();
+    });
+
+    it('generateDayMessage retries on 429 and returns the eventual text', async () => {
+        const game = makeGame();
+        mockGenerateContent
+            .mockRejectedValueOnce(make429('2s'))
+            .mockResolvedValueOnce({ response: { text: () => 'I suspect Alice.' } });
+
+        const promise = generateDayMessage(game, game.players['c1']);
+        await vi.runAllTimersAsync();
+        const msg = await promise;
+
+        expect(msg).toBe('I suspect Alice.');
+        expect(mockGenerateContent).toHaveBeenCalledTimes(2);
+    });
+
+    it('pickVoteTarget retries on 429 and returns a valid target', async () => {
+        const game = makeGame();
+        mockGenerateContent
+            .mockRejectedValueOnce(make429('2s'))
+            .mockResolvedValueOnce({ response: { text: () => 'Alice' } });
+
+        const promise = pickVoteTarget(game, game.players['c1']);
+        await vi.runAllTimersAsync();
+        const targetId = await promise;
+
+        expect(targetId).toBe('m1'); // Alice = m1
+        expect(mockGenerateContent).toHaveBeenCalledTimes(2);
     });
 });
 
