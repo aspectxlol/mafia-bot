@@ -3,15 +3,13 @@ import { Options, Partials } from 'discord.js';
 import { createRequire } from 'node:module';
 
 import { Button } from './buttons/index.js';
-import { DevCommand, HelpCommand, InfoCommand, TestCommand } from './commands/chat/index.js';
+import { HelpCommand, InfoCommand } from './commands/chat/index.js';
 import {
     ChatCommandMetadata,
     Command,
     MessageCommandMetadata,
     UserCommandMetadata,
 } from './commands/index.js';
-import { ViewDateSent } from './commands/message/index.js';
-import { ViewDateJoined } from './commands/user/index.js';
 import {
     ButtonHandler,
     CommandHandler,
@@ -57,16 +55,8 @@ async function start(): Promise<void> {
     // Commands
     let commands: Command[] = [
         // Chat Commands
-        new DevCommand(),
         new HelpCommand(),
         new InfoCommand(),
-        new TestCommand(),
-
-        // Message Context Commands
-        new ViewDateSent(),
-
-        // User Context Commands
-        new ViewDateJoined(),
 
         // TODO: Add new commands here
     ];
