@@ -1,12 +1,15 @@
 export type Role = 'mafia' | 'detective' | 'doctor' | 'civilian';
 export type Phase = 'lobby' | 'night' | 'day' | 'vote' | 'ended';
 
+export type AIProvider = 'gemini' | 'groq';
+
 export interface PlayerState {
     id: string;
     name: string;
     role: Role;
     alive: boolean;
     isAI: boolean;
+    aiProvider?: AIProvider; // which LLM backend this AI player uses
     protectedLastNight: boolean;
     lastProtectedId: string | null; // id of player protected last night
     selfProtectUsed: boolean;

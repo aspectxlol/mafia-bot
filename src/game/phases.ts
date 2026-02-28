@@ -4,6 +4,7 @@ import {
     EmbedBuilder,
     PermissionFlagsBits,
     TextChannel,
+    time,
     WebhookClient,
 } from 'discord.js';
 
@@ -217,7 +218,7 @@ export async function startNightPhase(game: GameState, client: Client): Promise<
     const alivePlayers = Object.values(game.players).filter(p => p.alive);
     const aliveList = alivePlayers.map(p => `• ${p.name}`).join('\n');
 
-    const nightEndsAt = Math.floor((Date.now() + NIGHT_MS) / 1000);
+    const nightEndsAt = new Date(Date.now() + NIGHT_MS);
 
     const embed = new EmbedBuilder()
         .setColor(0x1a0033)
@@ -228,7 +229,7 @@ export async function startNightPhase(game: GameState, client: Client): Promise<
                 `Check your DMs for your night action.`
         )
         .setFooter({
-            text: `☀️ Day begins <t:${nightEndsAt}:R> — actions auto-resolve at the end`,
+            text: `☀️ Day begins ${time(nightEndsAt, 'R')} — actions auto-resolve at the end`,
         });
 
     await channel.send({ embeds: [embed] });
@@ -298,8 +299,10 @@ export async function startNightPhase(game: GameState, client: Client): Promise<
 
     // ── AI night actions ────────────────────────────────────────────────────
     const aiNightPlayers = alivePlayers.filter(p => isAIId(p.id) && p.role !== 'civilian');
-    for (const aiPlayer of aiNightPlayers) {
-        const delay = Math.random() * 60_000 + 15_000; // 15–75 seconds
+    for (let idx = 0; idx < aiNightPlayers.length; idx++) {
+        const aiPlayer = aiNightPlayers[idx];
+        // Stagger: 20–35 s for first, each subsequent adds 40 s
+        const delay = 20_000 + idx * 40_000 + Math.random() * 15_000;
         setTimeout(async () => {
             const g = getGame(game.gameChannelId);
             if (!g || g.phase !== 'night') return;
@@ -453,7 +456,7 @@ export async function startDayPhase(game: GameState, client: Client): Promise<vo
         deathLine = '☀️ **Day begins.** No one was eliminated last night.';
     }
 
-    const voteStartsAt = Math.floor((Date.now() + DAY_MS) / 1000);
+    const voteStartsAt = new Date(Date.now() + DAY_MS);
 
     const embed = new EmbedBuilder()
         .setColor(0xffd700)
@@ -462,19 +465,23 @@ export async function startDayPhase(game: GameState, client: Client): Promise<vo
             `${deathLine}\n\n` +
                 `**Alive players (${alivePlayers.length}):**\n${alivePlayers.map(p => `• ${p.name}`).join('\n')}\n\n` +
                 `Discuss and figure out who the Mafia is!\n` +
-                `🗳️ Voting opens <t:${voteStartsAt}:R>`
+                `🗳️ Voting opens ${time(voteStartsAt, 'R')}`
         )
-        .setFooter({ text: `Discussion ends <t:${voteStartsAt}:T>` });
+        .setFooter({ text: `Discussion ends ${time(voteStartsAt, 'T')}` });
 
     await channel.send({ embeds: [embed] });
 
     // ── AI day messages ──────────────────────────────────────────────────────
     const aiAlive = alivePlayers.filter(p => isAIId(p.id));
     const webhook = aiAlive.length > 0 ? await getOrCreateWebhook(channel, game.gameNumber) : null;
+    // Global message slot so no two AI API calls fire at the same time
+    let globalMsgSlot = 0;
     for (const aiPlayer of aiAlive) {
         const msgCount = 1 + (Math.random() < 0.5 ? 1 : 0);
         for (let i = 0; i < msgCount; i++) {
-            const delay = Math.random() * (DAY_MS * 0.6) + 8_000 + i * 40_000;
+            // Each slot is ~75 s apart; first message starts at 15–30 s
+            const delay = 15_000 + globalMsgSlot * 75_000 + Math.random() * 15_000;
+            globalMsgSlot++;
             setTimeout(async () => {
                 const g = getGame(game.gameChannelId);
                 if (!g || g.phase !== 'day') return;
@@ -517,19 +524,19 @@ export async function startVotePhase(game: GameState, client: Client): Promise<v
 
     const alivePlayers = Object.values(game.players).filter(p => p.alive);
 
-    const voteEndsAt = Math.floor((Date.now() + VOTE_MS) / 1000);
+    const voteEndsAt = new Date(Date.now() + VOTE_MS);
 
     const embed = new EmbedBuilder()
         .setColor(0xff6600)
         .setTitle('🗳️ Voting Phase')
         .setDescription(
             `Time to vote! Use \`/vote @player\` (or \`/vote name:PlayerName\` for AI players).\n` +
-                `Voting closes <t:${voteEndsAt}:R>\n\n` +
+                `Voting closes ${time(voteEndsAt, 'R')}\n\n` +
                 `**Alive players:**\n${alivePlayers.map(p => `• ${p.name}`).join('\n')}`
         )
         .addFields({ name: 'Current Tally', value: 'No votes yet' })
         .setFooter({
-            text: `Most votes = eliminated. Tie = no elimination. Closes <t:${voteEndsAt}:T>`,
+            text: `Most votes = eliminated. Tie = no elimination. Closes ${time(voteEndsAt, 'T')}`,
         });
 
     const tallyMsg = await channel.send({ embeds: [embed] });
@@ -537,8 +544,10 @@ export async function startVotePhase(game: GameState, client: Client): Promise<v
 
     // ── AI votes ─────────────────────────────────────────────────────────────
     const aiAliveVote = alivePlayers.filter(p => isAIId(p.id));
-    for (const aiPlayer of aiAliveVote) {
-        const delay = Math.random() * 30_000 + 10_000; // 10–40 seconds
+    for (let idx = 0; idx < aiAliveVote.length; idx++) {
+        const aiPlayer = aiAliveVote[idx];
+        // Stagger: first votes at 15–25 s, each subsequent adds 35 s
+        const delay = 15_000 + idx * 35_000 + Math.random() * 10_000;
         setTimeout(async () => {
             const g = getGame(game.gameChannelId);
             if (!g || g.phase !== 'vote') return;

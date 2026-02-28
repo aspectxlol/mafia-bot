@@ -1,5 +1,5 @@
 /**
- * AI player support via Google Gemini.
+ * AI player support via Google Gemini and Groq (llama).
  *
  * Design: this module ONLY contains AI decision-making logic.
  * It never imports from phases.ts to avoid circular dependencies.
@@ -7,9 +7,10 @@
  */
 
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import Groq from 'groq-sdk';
 import { createRequire } from 'node:module';
 
-import { GameState, PlayerState } from './gameState.js';
+import { AIProvider, GameState, PlayerState } from './gameState.js';
 import { Logger } from '../services/index.js';
 
 const require = createRequire(import.meta.url);
@@ -44,9 +45,10 @@ export function logEvent(game: GameState, event: string): void {
     if (game.gameLog.length > 30) game.gameLog.splice(0, game.gameLog.length - 30);
 }
 
-// ─── Gemini client ───────────────────────────────────────────────────────────
+// ─── API clients ─────────────────────────────────────────────────────────────
 
 let geminiClient: GoogleGenerativeAI | null = null;
+let groqClient: Groq | null = null;
 
 function getGemini(): GoogleGenerativeAI {
     if (!geminiClient) {
@@ -55,6 +57,15 @@ function getGemini(): GoogleGenerativeAI {
         geminiClient = new GoogleGenerativeAI(config.geminiApiKey);
     }
     return geminiClient;
+}
+
+function getGroq(): Groq {
+    if (!groqClient) {
+        const config = require('../../config/config.json') as { groqApiKey?: string };
+        if (!config.groqApiKey) throw new Error('groqApiKey not set in config/config.json');
+        groqClient = new Groq({ apiKey: config.groqApiKey });
+    }
+    return groqClient;
 }
 
 // ─── Prompt helpers ──────────────────────────────────────────────────────────
@@ -88,12 +99,12 @@ function buildContext(game: GameState, player: PlayerState): string {
     return lines.filter(l => l !== '').join('\n');
 }
 
-/** Parse the retry-after delay (in ms) from a Gemini 429 error, defaulting to 60 s. */
-function parseRetryDelay(err: unknown): number {
-    const MIN_RETRY_MS = 5_000; // never retry faster than 5 s even if API says 0 s
+const MIN_RETRY_MS = 5_000; // never retry faster than 5 s
+const MAX_RETRIES = 3;
 
+/** Parse retry-after delay in ms from a Gemini 429 error. */
+function parseGeminiRetryDelay(err: unknown): number {
     if (err && typeof err === 'object') {
-        // SDK attaches errorDetails array on the error object
         const details = (err as Record<string, unknown>).errorDetails;
         if (Array.isArray(details)) {
             for (const detail of details) {
@@ -105,7 +116,6 @@ function parseRetryDelay(err: unknown): number {
                 ) {
                     const raw = (detail as Record<string, unknown>).retryDelay;
                     if (typeof raw === 'string') {
-                        // Format is e.g. "54s" or "54.362714374s" or "0s"
                         const seconds = parseFloat(raw);
                         if (!isNaN(seconds))
                             return Math.max(Math.ceil(seconds) * 1000, MIN_RETRY_MS);
@@ -113,22 +123,38 @@ function parseRetryDelay(err: unknown): number {
                 }
             }
         }
-        // Fallback: parse from message string "Please retry in Ns."
         const msg = (err as Record<string, unknown>).message;
         if (typeof msg === 'string') {
             const m = msg.match(/retry in ([\d.]+)s/i);
             if (m) return Math.max(Math.ceil(parseFloat(m[1])) * 1000, MIN_RETRY_MS);
         }
     }
-    return 60_000; // conservative default
+    return 60_000;
 }
 
-const MAX_RETRIES = 3;
+/** Parse retry-after delay in ms from a Groq 429 error. */
+function parseGroqRetryDelay(err: unknown): number {
+    if (err && typeof err === 'object') {
+        // Groq SDK attaches response headers; retry-after is in seconds
+        const headers = (err as Record<string, unknown>).headers;
+        if (headers && typeof headers === 'object') {
+            const ra = (headers as Record<string, unknown>)['retry-after'];
+            if (typeof ra === 'string') {
+                const seconds = parseFloat(ra);
+                if (!isNaN(seconds)) return Math.max(Math.ceil(seconds) * 1000, MIN_RETRY_MS);
+            }
+        }
+        const msg = (err as Record<string, unknown>).message;
+        if (typeof msg === 'string') {
+            const m = msg.match(/retry.after (\d+)/i) || msg.match(/retry in ([\d.]+)s/i);
+            if (m) return Math.max(Math.ceil(parseFloat(m[1])) * 1000, MIN_RETRY_MS);
+        }
+    }
+    return 60_000;
+}
 
-async function ask(context: string, task: string): Promise<string> {
-    const model = getGemini().getGenerativeModel({ model: 'gemini-2.0-flash' });
-    const prompt = `${context}\n\nTASK: ${task}\n\nRespond with ONLY what is asked. No extra explanation.`;
-
+async function askGemini(prompt: string): Promise<string> {
+    const model = getGemini().getGenerativeModel({ model: 'gemini-2.0-flash-lite' });
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
         try {
             const result = await model.generateContent(prompt);
@@ -136,7 +162,7 @@ async function ask(context: string, task: string): Promise<string> {
         } catch (err) {
             const status = (err as Record<string, unknown>).status;
             if (status === 429 && attempt < MAX_RETRIES) {
-                const delay = parseRetryDelay(err);
+                const delay = parseGeminiRetryDelay(err);
                 Logger.warn(
                     `Gemini rate-limited (attempt ${attempt}/${MAX_RETRIES}). Retrying in ${delay / 1000}s…`,
                     err
@@ -149,6 +175,43 @@ async function ask(context: string, task: string): Promise<string> {
         }
     }
     return '';
+}
+
+async function askGroq(prompt: string): Promise<string> {
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        try {
+            const completion = await getGroq().chat.completions.create({
+                model: 'llama-3.3-70b-versatile',
+                messages: [{ role: 'user', content: prompt }],
+                max_tokens: 100,
+                temperature: 0.8,
+            });
+            return completion.choices[0]?.message?.content?.trim() ?? '';
+        } catch (err) {
+            const status = (err as Record<string, unknown>).status;
+            if (status === 429 && attempt < MAX_RETRIES) {
+                const delay = parseGroqRetryDelay(err);
+                Logger.warn(
+                    `Groq rate-limited (attempt ${attempt}/${MAX_RETRIES}). Retrying in ${delay / 1000}s…`,
+                    err
+                );
+                await new Promise(res => setTimeout(res, delay));
+                continue;
+            }
+            Logger.error('Groq error', err);
+            return '';
+        }
+    }
+    return '';
+}
+
+async function ask(
+    context: string,
+    task: string,
+    provider: AIProvider = 'gemini'
+): Promise<string> {
+    const prompt = `${context}\n\nTASK: ${task}\n\nRespond with ONLY what is asked. No extra explanation.`;
+    return provider === 'groq' ? askGroq(prompt) : askGemini(prompt);
 }
 
 function pickFromList<T extends { name: string }>(raw: string, candidates: T[]): T {
@@ -170,13 +233,16 @@ export async function runAINightAction(game: GameState, player: PlayerState): Pr
     const alive = Object.values(game.players).filter(p => p.alive);
     const ctx = buildContext(game, player);
 
+    const prov = player.aiProvider ?? 'gemini';
+
     if (player.role === 'mafia') {
         if (game.night.actionsReceived.includes('kill')) return; // another mafia already acted
         const targets = alive.filter(p => p.role !== 'mafia' && p.id !== player.id);
         if (targets.length === 0) return;
         const raw = await ask(
             ctx,
-            `It is night. Choose one Town player to eliminate. Options: ${targets.map(p => p.name).join(', ')}. Reply with only the player's exact name.`
+            `It is night. Choose one Town player to eliminate. Options: ${targets.map(p => p.name).join(', ')}. Reply with only the player's exact name.`,
+            prov
         );
         const target = pickFromList(raw, targets);
         game.night.killTarget = target.id;
@@ -188,7 +254,8 @@ export async function runAINightAction(game: GameState, player: PlayerState): Pr
         if (targets.length === 0) return;
         const raw = await ask(
             ctx,
-            `It is night. Choose one player to investigate. Options: ${targets.map(p => p.name).join(', ')}. Reply with only the player's exact name.`
+            `It is night. Choose one player to investigate. Options: ${targets.map(p => p.name).join(', ')}. Reply with only the player's exact name.`,
+            prov
         );
         const target = pickFromList(raw, targets);
         game.night.investigateTarget = target.id;
@@ -208,7 +275,8 @@ export async function runAINightAction(game: GameState, player: PlayerState): Pr
         if (targets.length === 0) return;
         const raw = await ask(
             ctx,
-            `It is night. Choose one player to protect from a Mafia kill. Options: ${targets.map(p => p.name).join(', ')}. Reply with only the player's exact name.`
+            `It is night. Choose one player to protect from a Mafia kill. Options: ${targets.map(p => p.name).join(', ')}. Reply with only the player's exact name.`,
+            prov
         );
         const target = pickFromList(raw, targets);
         game.night.protectTarget = target.id;
@@ -225,7 +293,8 @@ export async function generateDayMessage(game: GameState, player: PlayerState): 
     const ctx = buildContext(game, player);
     const text = await ask(
         ctx,
-        `It is the day discussion phase. Write ONE short message (1–2 sentences) as a player trying to figure out who the Mafia is. Be natural and conversational. Never break the fourth wall or reveal your role directly.`
+        `It is the day discussion phase. Write ONE short message (1–2 sentences) as a player trying to figure out who the Mafia is. Be natural and conversational. Never break the fourth wall or reveal your role directly.`,
+        player.aiProvider ?? 'gemini'
     );
     return text || 'Not sure who to trust right now...';
 }
@@ -239,7 +308,8 @@ export async function pickVoteTarget(game: GameState, player: PlayerState): Prom
     const ctx = buildContext(game, player);
     const raw = await ask(
         ctx,
-        `It is the voting phase. Vote to eliminate one player. Options: ${alive.map(p => p.name).join(', ')}. Reply with only the player's exact name.`
+        `It is the voting phase. Vote to eliminate one player. Options: ${alive.map(p => p.name).join(', ')}. Reply with only the player's exact name.`,
+        player.aiProvider ?? 'gemini'
     );
     return pickFromList(raw, alive).id;
 }

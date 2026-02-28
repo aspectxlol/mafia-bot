@@ -6,7 +6,9 @@ vi.mock('../../src/services/index.js', () => ({
     Logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() },
 }));
 
-vi.mock('../../config/config.json', () => ({ default: { geminiApiKey: 'test-key' } }));
+vi.mock('../../config/config.json', () => ({
+    default: { geminiApiKey: 'test-key', groqApiKey: 'test-groq-key' },
+}));
 vi.mock('../../config/debug.json', () => ({}));
 vi.mock('../../lang/logs.json', () => ({}));
 
@@ -17,6 +19,18 @@ vi.mock('@google/generative-ai', () => ({
         getGenerativeModel: vi.fn().mockReturnValue({
             generateContent: mockGenerateContent,
         }),
+    })),
+}));
+
+// Mock groq-sdk so no real HTTP calls are made
+const mockGroqCreate = vi.fn();
+vi.mock('groq-sdk', () => ({
+    default: vi.fn().mockImplementation(() => ({
+        chat: {
+            completions: {
+                create: mockGroqCreate,
+            },
+        },
     })),
 }));
 
@@ -94,6 +108,18 @@ function mockGeminiResponse(text: string) {
 /** Make Gemini throw an error. */
 function mockGeminiError(msg = 'API error') {
     mockGenerateContent.mockRejectedValueOnce(new Error(msg));
+}
+
+/** Make Groq respond with a specific string. */
+function mockGroqResponse(text: string) {
+    mockGroqCreate.mockResolvedValueOnce({
+        choices: [{ message: { content: text } }],
+    });
+}
+
+/** Make Groq throw an error. */
+function mockGroqError(msg = 'API error') {
+    mockGroqCreate.mockRejectedValueOnce(new Error(msg));
 }
 
 afterEach(() => {
@@ -763,5 +789,121 @@ describe('night sequence integration', () => {
         await runAINightAction(game, game.players['doc1']);
 
         expect(game.gameLog.length).toBe(3);
+    });
+});
+
+// ─── Groq provider ────────────────────────────────────────────────────────────
+
+describe('Groq provider', () => {
+    function makeGroqPlayer(id: string, overrides: Partial<PlayerState> = {}): PlayerState {
+        return {
+            id,
+            name: `Player_${id}`,
+            role: 'civilian',
+            alive: true,
+            isAI: true,
+            aiProvider: 'groq',
+            protectedLastNight: false,
+            lastProtectedId: null,
+            selfProtectUsed: false,
+            ...overrides,
+        };
+    }
+
+    it('uses Groq (not Gemini) when aiProvider is "groq"', async () => {
+        const game = makeGame({
+            players: {
+                m1: makeGroqPlayer('m1', { name: 'Alice', role: 'mafia' }),
+                c1: makeGroqPlayer('c1', { name: 'Dave', role: 'civilian' }),
+            },
+        });
+        mockGroqResponse('Dave');
+
+        await runAINightAction(game, game.players['m1']);
+
+        expect(mockGroqCreate).toHaveBeenCalledTimes(1);
+        expect(mockGenerateContent).not.toHaveBeenCalled();
+        expect(game.night.killTarget).toBe('c1');
+    });
+
+    it('generateDayMessage uses Groq when aiProvider is "groq"', async () => {
+        const game = makeGame();
+        const groqPlayer = makeGroqPlayer('gp', { name: 'Zoe', role: 'civilian' });
+        game.players['gp'] = groqPlayer;
+
+        mockGroqResponse('I think Alice is acting suspicious.');
+        const msg = await generateDayMessage(game, groqPlayer);
+
+        expect(mockGroqCreate).toHaveBeenCalledTimes(1);
+        expect(mockGenerateContent).not.toHaveBeenCalled();
+        expect(msg).toBe('I think Alice is acting suspicious.');
+    });
+
+    it('pickVoteTarget uses Groq when aiProvider is "groq"', async () => {
+        const game = makeGame();
+        const groqPlayer = makeGroqPlayer('gp', { name: 'Zoe', role: 'civilian' });
+        game.players['gp'] = groqPlayer;
+
+        mockGroqResponse('Alice'); // Alice = m1
+        const targetId = await pickVoteTarget(game, groqPlayer);
+
+        expect(mockGroqCreate).toHaveBeenCalledTimes(1);
+        expect(mockGenerateContent).not.toHaveBeenCalled();
+        expect(targetId).toBe('m1');
+    });
+
+    it('falls back to random target when Groq API throws', async () => {
+        const game = makeGame({
+            players: {
+                m1: makeGroqPlayer('m1', { name: 'Alice', role: 'mafia' }),
+                c1: makeGroqPlayer('c1', { name: 'Dave', role: 'civilian' }),
+            },
+        });
+        mockGroqError('network timeout');
+
+        await runAINightAction(game, game.players['m1']);
+
+        expect(game.night.killTarget).not.toBeNull();
+    });
+
+    it('returns default message when Groq returns empty string', async () => {
+        const game = makeGame();
+        const groqPlayer = makeGroqPlayer('gp', { name: 'Zoe', role: 'civilian' });
+        game.players['gp'] = groqPlayer;
+
+        mockGroqResponse('');
+        const msg = await generateDayMessage(game, groqPlayer);
+
+        expect(msg).toBe('Not sure who to trust right now...');
+    });
+
+    it('retries Groq on 429 using retry-after header', async () => {
+        vi.useFakeTimers();
+        const game = makeGame({
+            players: {
+                m1: makeGroqPlayer('m1', { name: 'Alice', role: 'mafia' }),
+                c1: makeGroqPlayer('c1', { name: 'Dave', role: 'civilian' }),
+            },
+        });
+
+        const rateLimitErr = Object.assign(new Error('rate limited'), {
+            status: 429,
+            headers: { 'retry-after': '10' },
+        });
+        mockGroqCreate
+            .mockRejectedValueOnce(rateLimitErr)
+            .mockResolvedValueOnce({ choices: [{ message: { content: 'Dave' } }] });
+
+        const promise = runAINightAction(game, game.players['m1']);
+        await vi.runAllTimersAsync();
+        await promise;
+
+        expect(mockGroqCreate).toHaveBeenCalledTimes(2);
+        expect(game.night.killTarget).toBe('c1');
+        expect(vi.mocked(Logger.warn)).toHaveBeenCalledWith(
+            expect.stringContaining('Groq rate-limited'),
+            expect.anything()
+        );
+        vi.useRealTimers();
     });
 });
