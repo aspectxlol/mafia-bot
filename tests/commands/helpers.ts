@@ -18,6 +18,7 @@ export interface FakeInteraction {
     followUp: ReturnType<typeof vi.fn>;
     options: {
         getUser: (name: string, required?: boolean) => FakeUser | null;
+        getString: (name: string, required?: boolean) => string | null;
     };
     client: {
         channels: {
@@ -28,9 +29,10 @@ export interface FakeInteraction {
 }
 
 export function makeIntr(
-    overrides: Partial<FakeInteraction> & { targetUser?: FakeUser } = {}
+    overrides: Partial<FakeInteraction> & { targetUser?: FakeUser; targetName?: string | null } = {}
 ): FakeInteraction {
     const target = overrides.targetUser ?? { id: 'target1' };
+    const targetName = overrides.targetName !== undefined ? overrides.targetName : null;
     return {
         channelId: 'ch1',
         guild: { id: 'guild1' },
@@ -38,7 +40,12 @@ export function makeIntr(
         editReply: vi.fn().mockResolvedValue(undefined),
         followUp: vi.fn().mockResolvedValue(undefined),
         options: {
-            getUser: vi.fn().mockReturnValue(target),
+            getUser: vi
+                .fn()
+                .mockImplementation((_name: string, required?: boolean) =>
+                    targetName !== null ? null : target
+                ),
+            getString: vi.fn().mockReturnValue(targetName),
         },
         client: {
             channels: {

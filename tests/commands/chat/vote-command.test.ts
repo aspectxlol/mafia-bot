@@ -214,4 +214,72 @@ describe('VoteCommand', () => {
         // Both alive players have voted
         expect(resolveVote).toHaveBeenCalledWith(game, intr.client);
     });
+
+    it('rejects when neither target nor name option is provided', async () => {
+        const game = makeGame();
+        setGame(GAME_CH, game);
+        // Override options directly to return null for both
+        const intr = makeIntr({ channelId: GAME_CH, user: { id: 'c1' } });
+        (intr.options.getUser as any).mockReturnValue(null);
+        (intr.options.getString as any).mockReturnValue(null);
+        await cmd.execute(intr as any, null as any);
+        expect(intr.editReply).toHaveBeenCalledWith(expect.stringContaining('specify a player'));
+    });
+
+    it('allows voting for an AI player by name', async () => {
+        const aiPlayer: PlayerState = {
+            id: 'ai:1:1',
+            name: 'Alice',
+            role: 'civilian',
+            alive: true,
+            isAI: true,
+            protectedLastNight: false,
+            lastProtectedId: null,
+            selfProtectUsed: false,
+        };
+        const game = makeGame({
+            players: {
+                m1: makePlayer('m1', 'mafia'),
+                c1: makePlayer('c1', 'civilian'),
+                'ai:1:1': aiPlayer,
+            },
+        });
+        setGame(GAME_CH, game);
+        const intr = makeIntr({ channelId: GAME_CH, user: { id: 'c1' }, targetName: 'Alice' });
+        await cmd.execute(intr as any, null as any);
+        expect(game.vote.votes['c1']).toBe('ai:1:1');
+        expect(intr.editReply).toHaveBeenCalledWith(expect.stringContaining('Alice'));
+    });
+
+    it('rejects vote by name when no player has that name', async () => {
+        const game = makeGame();
+        setGame(GAME_CH, game);
+        const intr = makeIntr({ channelId: GAME_CH, user: { id: 'c1' }, targetName: 'Nobody' });
+        await cmd.execute(intr as any, null as any);
+        expect(intr.editReply).toHaveBeenCalledWith(expect.stringContaining('Nobody'));
+    });
+
+    it('is case-insensitive when matching player name', async () => {
+        const aiPlayer: PlayerState = {
+            id: 'ai:1:2',
+            name: 'Bob',
+            role: 'mafia',
+            alive: true,
+            isAI: true,
+            protectedLastNight: false,
+            lastProtectedId: null,
+            selfProtectUsed: false,
+        };
+        const game = makeGame({
+            players: {
+                m1: makePlayer('m1', 'mafia'),
+                c1: makePlayer('c1', 'civilian'),
+                'ai:1:2': aiPlayer,
+            },
+        });
+        setGame(GAME_CH, game);
+        const intr = makeIntr({ channelId: GAME_CH, user: { id: 'c1' }, targetName: 'BOB' });
+        await cmd.execute(intr as any, null as any);
+        expect(game.vote.votes['c1']).toBe('ai:1:2');
+    });
 });
