@@ -152,7 +152,17 @@ describe('EndCommand', () => {
             },
         });
         await cmd.execute(intr as any, null as any);
-        expect(mockChannel.send).toHaveBeenCalledWith(expect.stringContaining('force-ended'));
+        expect(mockChannel.send).toHaveBeenCalledWith(
+            expect.objectContaining({
+                embeds: expect.arrayContaining([
+                    expect.objectContaining({
+                        data: expect.objectContaining({
+                            title: expect.stringMatching(/force-ended/i),
+                        }),
+                    }),
+                ]),
+            })
+        );
     });
 
     it('deletes the mafia channel on force-end', async () => {

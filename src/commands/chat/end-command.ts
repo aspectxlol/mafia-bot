@@ -1,4 +1,9 @@
-import { ChatInputCommandInteraction, PermissionsString, TextChannel } from 'discord.js';
+import {
+    ChatInputCommandInteraction,
+    EmbedBuilder,
+    PermissionsString,
+    TextChannel,
+} from 'discord.js';
 
 import {
     clearTimers,
@@ -51,9 +56,16 @@ export class EndCommand implements Command {
                 .fetch(game.gameChannelId)
                 .catch(() => null)) as TextChannel | null;
             if (gameChannel) {
-                await gameChannel.send(
-                    `🛑 **Game #${game.gameNumber} has been force-ended by the host** (<@${intr.user.id}>).`
-                );
+                await gameChannel.send({
+                    embeds: [
+                        new EmbedBuilder()
+                            .setColor(0xff4a4a)
+                            .setTitle(`🛑 Game #${game.gameNumber} Force-Ended`)
+                            .setDescription(
+                                `The game was force-ended by the host <@${intr.user.id}>.`
+                            ),
+                    ],
+                });
             }
         } catch {
             // Ignore

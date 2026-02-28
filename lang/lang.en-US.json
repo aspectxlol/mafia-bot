@@ -15,39 +15,32 @@
                     }
                 ]
             },
-            "helpContactSupport": {
-                "title": "Help - {{REF:helpOptions.contactSupport}}",
-                "description": [
-                    "Have a question or feedback? Join our support server at the link below!"
-                ],
-                "fields": [
-                    {
-                        "name": "{{REF:fields.links}}",
-                        "value": ["{{REF:links.supportEmbed}}"]
-                    }
-                ]
-            },
             "helpCommands": {
                 "title": "Help - {{REF:helpOptions.commands}}",
                 "fields": [
                     {
-                        "name": "Commands",
+                        "name": "Game Commands",
                         "value": [
-                            "To see the available commands, just type `/` and select the bot from the left side. You can then scroll through all available commands. Some commands may be hidden if you don't have permission to view them.",
-                            "",
-                            "{{CMD_LINK_TEST}} - {{REF:commandDescs.test}}",
+                            "{{CMD_LINK_START}} - {{REF:commandDescs.start}}",
+                            "{{CMD_LINK_VOTE}} - {{REF:commandDescs.vote}}",
+                            "{{CMD_LINK_STATUS}} - {{REF:commandDescs.status}}",
+                            "{{CMD_LINK_END}} - {{REF:commandDescs.end}}"
+                        ]
+                    },
+                    {
+                        "name": "Role Night Actions (via DM)",
+                        "value": [
+                            "{{CMD_LINK_KILL}} - {{REF:commandDescs.kill}}",
+                            "{{CMD_LINK_INVESTIGATE}} - {{REF:commandDescs.investigate}}",
+                            "{{CMD_LINK_PROTECT}} - {{REF:commandDescs.protect}}"
+                        ]
+                    },
+                    {
+                        "name": "Other",
+                        "value": [
+                            "{{CMD_LINK_HELP}} - {{REF:commandDescs.help}}",
                             "{{CMD_LINK_INFO}} - {{REF:commandDescs.info}}"
                         ]
-                    },
-                    {
-                        "name": "Command Permissions",
-                        "value": [
-                            "Want to restrict commands to certain roles, users, or channels? Set up permissions in the bot's integration page by going to **Server Settings** > **Integrations**, and then **Manage** for this bot."
-                        ]
-                    },
-                    {
-                        "name": "{{REF:fields.links}}",
-                        "value": ["{{REF:links.docsEmbed}}", "{{REF:links.supportEmbed}}"]
                     }
                 ]
             },
@@ -64,22 +57,24 @@
                 "title": "{{COM:bot.name}} - About",
                 "description": "{{REF:bot.description}}",
                 "fields": [
-                    { "name": "Author", "value": "{{REF:links.authorEmbed}}" },
                     {
-                        "name": "{{REF:fields.links}}",
+                        "name": "How to Play",
                         "value": [
-                            "{{REF:links.sourceEmbed}}",
-                            "{{REF:links.docsEmbed}}",
-                            "{{REF:links.termsEmbed}}",
-                            "{{REF:links.voteEmbed}}",
-                            "{{REF:links.donateEmbed}}",
-                            "{{REF:links.supportEmbed}}",
-                            "{{REF:links.inviteEmbed}}"
+                            "1. A host runs `/start` and tags 4–7 players.",
+                            "2. Roles are assigned secretly and sent to each player via DM.",
+                            "3. Each **Night**, Mafia picks a kill, Detective investigates, Doctor protects.",
+                            "4. Each **Day**, players discuss and vote with `/vote` to eliminate someone.",
+                            "5. Town wins when all Mafia are eliminated. Mafia wins when they outnumber Town."
                         ]
                     },
                     {
-                        "name": "Created With",
-                        "value": ["{{REF:links.templateEmbed}}"]
+                        "name": "Roles",
+                        "value": [
+                            "🔫 **Mafia** — eliminate the Town each night",
+                            "🔍 **Detective** — investigate a player each night",
+                            "💊 **Doctor** — protect a player each night",
+                            "👤 **Civilian** — vote wisely during the day"
+                        ]
                     }
                 ]
             },
@@ -186,7 +181,7 @@
             "translators": "[TranslatorName#1234](https://github.com/)"
         },
         "bot": {
-            "description": "{{REF:links.templateEmbed}} helps give developers a starting point for new Discord bots, so that much of the initial setup can be avoided and developers can instead focus on meaningful bot features."
+            "description": "A Discord Mafia party game bot. Host a game of Mafia right inside your server — roles, night actions, voting, and more!"
         },
         "chatCommands": {
             "dev": "dev",
@@ -299,11 +294,9 @@
             "info": "info"
         },
         "helpOptions": {
-            "contactSupport": "Contact Support",
             "commands": "Commands"
         },
         "helpOptionDescs": {
-            "contactSupport": "❓ {{REF:helpOptions.contactSupport}} ❓",
             "commands": "{{REF:helpOptions.commands}} -- What commands are there? How do I restrict who is allowed to use commands?"
         },
         "infoOptions": {

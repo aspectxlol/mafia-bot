@@ -15,18 +15,6 @@
                     }
                 ]
             },
-            "helpContactSupport": {
-                "title": "Help - {{REF:helpOptions.contactSupport}}",
-                "description": [
-                    "Have a question or feedback? Join our support server at the link below!"
-                ],
-                "fields": [
-                    {
-                        "name": "{{REF:fields.links}}",
-                        "value": ["{{REF:links.supportEmbed}}"]
-                    }
-                ]
-            },
             "helpCommands": {
                 "title": "Help - {{REF:helpOptions.commands}}",
                 "fields": [
@@ -299,11 +287,9 @@
             "info": "info"
         },
         "helpOptions": {
-            "contactSupport": "Contact Support",
             "commands": "Commands"
         },
         "helpOptionDescs": {
-            "contactSupport": "❓ {{REF:helpOptions.contactSupport}} ❓",
             "commands": "{{REF:helpOptions.commands}} -- What commands are there? How do I restrict who is allowed to use commands?"
         },
         "infoOptions": {

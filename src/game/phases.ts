@@ -21,10 +21,18 @@ const VOTE_MS = 2 * 60 * 1000;
 const VOTE_WARN_MS = 1 * 60 * 1000;
 
 // ─── DM helper ──────────────────────────────────────────────────────────────
-export async function sendDM(client: Client, userId: string, content: string): Promise<void> {
+export async function sendDM(
+    client: Client,
+    userId: string,
+    content: string | EmbedBuilder
+): Promise<void> {
     try {
         const user = await client.users.fetch(userId);
-        await user.send(content);
+        if (typeof content === 'string') {
+            await user.send(content);
+        } else {
+            await user.send({ embeds: [content] });
+        }
     } catch {
         // User may have DMs disabled — silently ignore
     }
@@ -77,12 +85,24 @@ export async function launchGame(game: GameState, client: Client): Promise<void>
 
         game.mafiaChannelId = mafiaChannel.id;
 
-        await mafiaChannel.send(
-            `🔫 **Welcome to the Mafia channel!**\n` +
-                `Your team: **${mafiaNames.join(', ')}**\n\n` +
-                `Each night, use \`/kill @target\` here to choose your kill target.\n` +
-                `Only visible to you and your teammates.`
-        );
+        await mafiaChannel.send({
+            embeds: [
+                new EmbedBuilder()
+                    .setColor(0x8b0000)
+                    .setTitle('🔫 Welcome to the Mafia Channel!')
+                    .setDescription(
+                        `This channel is only visible to Mafia members. Use it to coordinate your nightly kill.`
+                    )
+                    .addFields(
+                        { name: 'Your Team', value: mafiaNames.join(', ') || 'Just you!' },
+                        {
+                            name: 'Night Action',
+                            value: 'Each night, use `/kill @target` here to choose who to eliminate.',
+                        }
+                    )
+                    .setFooter({ text: `Game #${game.gameNumber}` }),
+            ],
+        });
     } catch (err) {
         Logger.error('Failed to create mafia channel', err);
     }
@@ -98,15 +118,23 @@ export async function launchGame(game: GameState, client: Client): Promise<void>
         .fetch(game.gameChannelId)
         .catch(() => null)) as TextChannel | null;
     if (gameChannel) {
-        const playerList = Object.values(game.players)
-            .map(p => `• **${p.name}** — role assigned`)
-            .join('\n');
-
-        await gameChannel.send(
-            `🎭 **Game #${game.gameNumber} is starting!**\n\n` +
-                `${playerList}\n\n` +
-                `Roles have been sent to your DMs. Check them now!`
-        );
+        await gameChannel.send({
+            embeds: [
+                new EmbedBuilder()
+                    .setColor(0x6600cc)
+                    .setTitle(`🎭 Game #${game.gameNumber} is Starting!`)
+                    .setDescription(
+                        `Roles have been secretly assigned and sent to each player via DM. Check your DMs now!`
+                    )
+                    .addFields({
+                        name: `Players (${Object.keys(game.players).length})`,
+                        value: Object.values(game.players)
+                            .map(p => `• **${p.name}**`)
+                            .join('\n'),
+                    })
+                    .setFooter({ text: 'Night 1 begins shortly...' }),
+            ],
+        });
     }
 
     await startNightPhase(game, client);
@@ -122,6 +150,15 @@ export async function startNightPhase(game: GameState, client: Client): Promise<
         .fetch(game.gameChannelId)
         .catch(() => null)) as TextChannel | null;
     if (!channel) return;
+
+    // Lock channel during night — @everyone cannot send messages
+    try {
+        await channel.permissionOverwrites.edit(channel.guild.roles.everyone, {
+            SendMessages: false,
+        });
+    } catch {
+        // Ignore permission errors (missing Manage Channel perms)
+    }
 
     const alivePlayers = Object.values(game.players).filter(p => p.alive);
     const aliveList = alivePlayers.map(p => `• ${p.name}`).join('\n');
@@ -150,34 +187,54 @@ export async function startNightPhase(game: GameState, client: Client): Promise<
             await sendDM(
                 client,
                 player.id,
-                `🌙 **Night ${game.round} — Mafia Action**\n` +
-                    `Your teammate(s): **${mafiaTeam || 'none'}**\n\n` +
-                    `Use \`/kill @target\` in the **mafia secret channel** to choose who to eliminate.\n\n` +
-                    `**Alive players:**\n${aliveList}`
+                new EmbedBuilder()
+                    .setColor(0x8b0000)
+                    .setTitle(`🌙 Night ${game.round} — Mafia Action`)
+                    .addFields(
+                        { name: 'Teammates', value: mafiaTeam || 'none' },
+                        {
+                            name: 'Action',
+                            value: 'Use `/kill @target` in the **secret Mafia channel** to eliminate someone.',
+                        },
+                        { name: 'Alive Players', value: aliveList }
+                    )
             );
         } else if (player.role === 'detective') {
             await sendDM(
                 client,
                 player.id,
-                `🌙 **Night ${game.round} — Detective Action**\n` +
-                    `Use \`/investigate @target\` in a **DM with me** to investigate a player.\n\n` +
-                    `**Alive players:**\n${aliveList}`
+                new EmbedBuilder()
+                    .setColor(0x4169e1)
+                    .setTitle(`🌙 Night ${game.round} — Detective Action`)
+                    .addFields(
+                        {
+                            name: 'Action',
+                            value: 'Use `/investigate @target` in **DM with me** to check if someone is Mafia.',
+                        },
+                        { name: 'Alive Players', value: aliveList }
+                    )
             );
         } else if (player.role === 'doctor') {
-            const lastProtectNote =
-                game.round > 1 && game.players[player.id].protectedLastNight
-                    ? `⚠️ You cannot protect the same person as last night.\n`
-                    : '';
-            const selfNote = game.players[player.id].selfProtectUsed
-                ? `⚠️ You have already used your self-protect.\n`
-                : '✅ You may still protect yourself (once per game).\n';
+            const constraints: string[] = [];
+            if (game.round > 1 && game.players[player.id].protectedLastNight)
+                constraints.push('⚠️ Cannot protect the same person as last night.');
+            if (game.players[player.id].selfProtectUsed)
+                constraints.push('⚠️ Self-protect already used.');
+            else constraints.push('✅ You may still protect yourself (once per game).');
             await sendDM(
                 client,
                 player.id,
-                `🌙 **Night ${game.round} — Doctor Action**\n` +
-                    `${lastProtectNote}${selfNote}\n` +
-                    `Use \`/protect @target\` in a **DM with me** to protect someone tonight.\n\n` +
-                    `**Alive players:**\n${aliveList}`
+                new EmbedBuilder()
+                    .setColor(0x00c851)
+                    .setTitle(`🌙 Night ${game.round} — Doctor Action`)
+                    .addFields(
+                        {
+                            name: 'Action',
+                            value: 'Use `/protect @target` in **DM with me** to protect someone tonight.',
+                        },
+                        { name: 'Restrictions', value: constraints.join('\n') },
+                        { name: 'Alive Players', value: aliveList }
+                    )
             );
         }
     }
@@ -200,9 +257,14 @@ export async function startNightPhase(game: GameState, client: Client): Promise<
             missing.push('Doctor (protect)');
 
         if (missing.length > 0) {
-            await channel.send(
-                `⏰ **1 minute remaining!** Still waiting for: ${missing.join(', ')}`
-            );
+            await channel.send({
+                embeds: [
+                    new EmbedBuilder()
+                        .setColor(0xff9900)
+                        .setTitle('⏰ 1 Minute Remaining — Night Phase')
+                        .setDescription(`Still waiting for: **${missing.join(', ')}**`),
+                ],
+            });
         }
     }, NIGHT_WARN_MS);
 
@@ -250,8 +312,13 @@ export async function resolveNight(game: GameState, client: Client): Promise<voi
             await sendDM(
                 client,
                 detective.id,
-                `🔍 **Investigation Result — Night ${game.round}**\n` +
-                    `**${target?.name ?? 'Unknown'}** is: **${isMafia ? '🔫 Mafia' : '✅ Not Mafia'}**`
+                new EmbedBuilder()
+                    .setColor(isMafia ? 0x8b0000 : 0x00c851)
+                    .setTitle(`🔍 Investigation Result — Night ${game.round}`)
+                    .addFields({
+                        name: target?.name ?? 'Unknown',
+                        value: isMafia ? '🔫 **Mafia!**' : '✅ **Not Mafia**',
+                    })
             );
         }
     }
@@ -277,6 +344,15 @@ export async function startDayPhase(game: GameState, client: Client): Promise<vo
         .fetch(game.gameChannelId)
         .catch(() => null)) as TextChannel | null;
     if (!channel) return;
+
+    // Unlock channel for day discussion
+    try {
+        await channel.permissionOverwrites.edit(channel.guild.roles.everyone, {
+            SendMessages: null, // reset to inherit
+        });
+    } catch {
+        // Ignore permission errors
+    }
 
     const alivePlayers = Object.values(game.players).filter(p => p.alive);
 
@@ -341,7 +417,16 @@ export async function startVotePhase(game: GameState, client: Client): Promise<v
     game.reminderTimer = setTimeout(async () => {
         const g = getGame(game.gameChannelId);
         if (!g || g.phase !== 'vote') return;
-        await channel.send('⏰ **1 minute remaining in the vote!**');
+        await channel.send({
+            embeds: [
+                new EmbedBuilder()
+                    .setColor(0xff9900)
+                    .setTitle('⏰ 1 Minute Remaining — Voting Phase')
+                    .setDescription(
+                        'Cast or change your vote with `/vote @player` before time runs out!'
+                    ),
+            ],
+        });
     }, VOTE_WARN_MS);
 
     // ── Auto-resolve timer ────────────────────────────────────────────────────
@@ -416,26 +501,50 @@ export async function resolveVote(game: GameState, client: Client): Promise<void
     const entries = Object.entries(tally).sort(([, a], [, b]) => b - a);
 
     if (entries.length === 0) {
-        await channel.send(
-            `🤷 **No votes were cast.** The town couldn't decide. Nobody is eliminated.`
-        );
+        await channel.send({
+            embeds: [
+                new EmbedBuilder()
+                    .setColor(0x888888)
+                    .setTitle('🤷 No Votes Cast')
+                    .setDescription("The town couldn't decide. Nobody is eliminated."),
+            ],
+        });
     } else {
         const [topId, topVotes] = entries[0];
         const tied = entries.filter(([, v]) => v === topVotes);
 
         if (tied.length > 1) {
             const tieNames = tied.map(([id]) => game.players[id]?.name ?? id).join(', ');
-            await channel.send(
-                `⚖️ **It's a tie!** The town couldn't decide. Nobody is eliminated.\n(Tied: ${tieNames}, each with ${topVotes} vote(s))`
-            );
+            await channel.send({
+                embeds: [
+                    new EmbedBuilder()
+                        .setColor(0x888888)
+                        .setTitle("⚖️ It's a Tie!")
+                        .setDescription("The town couldn't decide. Nobody is eliminated.")
+                        .addFields({
+                            name: 'Tied Players',
+                            value: `${tieNames} — each with **${topVotes}** vote(s)`,
+                        }),
+                ],
+            });
         } else {
             const eliminated = game.players[topId];
             if (eliminated) {
                 eliminated.alive = false;
-                await channel.send(
-                    `🪓 **${eliminated.name}** has been eliminated with ${topVotes} vote(s)!\n` +
-                        `They were a **${getRoleDisplayName(eliminated.role)}** ${getRoleEmoji(eliminated.role)}`
-                );
+                await channel.send({
+                    embeds: [
+                        new EmbedBuilder()
+                            .setColor(0x8b0000)
+                            .setTitle('🪓 Player Eliminated')
+                            .setDescription(
+                                `**${eliminated.name}** has been eliminated with **${topVotes}** vote(s)!`
+                            )
+                            .addFields({
+                                name: 'Their Role',
+                                value: `${getRoleDisplayName(eliminated.role)} ${getRoleEmoji(eliminated.role)}`,
+                            }),
+                    ],
+                });
             }
         }
     }

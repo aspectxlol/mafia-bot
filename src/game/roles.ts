@@ -1,3 +1,5 @@
+import { EmbedBuilder } from 'discord.js';
+
 import { GameState, Role } from './gameState.js';
 
 export interface RoleBalance {
@@ -69,36 +71,56 @@ export function getRoleDisplayName(role: Role): string {
     }
 }
 
-export function getRoleCard(role: Role, mafiaTeamNames: string[], _playerId: string): string {
+export function getRoleCard(role: Role, mafiaTeamNames: string[], _playerId: string): EmbedBuilder {
     switch (role) {
         case 'mafia':
-            return (
-                `🔫 **You are Mafia!**\n` +
-                `Your goal: eliminate the Town.\n` +
-                `Your team: **${mafiaTeamNames.join(', ') || 'Just you!'}**\n\n` +
-                `Each night, use \`/kill @target\` in the secret Mafia channel.`
-            );
+            return new EmbedBuilder()
+                .setColor(0x8b0000)
+                .setTitle('🔫 You are Mafia!')
+                .setDescription('Your goal: eliminate the Town before they vote you out.')
+                .addFields(
+                    {
+                        name: 'Your Team',
+                        value: mafiaTeamNames.join(', ') || 'Just you!',
+                    },
+                    {
+                        name: 'Night Action',
+                        value: 'Use `/kill @target` in the **secret Mafia channel** each night.',
+                    }
+                );
         case 'detective':
-            return (
-                `🔍 **You are the Detective!**\n` +
-                `Your goal: identify the Mafia.\n\n` +
-                `Each night, use \`/investigate @target\` in **DM with me** to check if someone is Mafia.`
-            );
+            return new EmbedBuilder()
+                .setColor(0x4169e1)
+                .setTitle('🔍 You are the Detective!')
+                .setDescription('Your goal: identify and expose the Mafia to the Town.')
+                .addFields({
+                    name: 'Night Action',
+                    value: 'Use `/investigate @target` in **DM with me** — I will tell you if they are Mafia.',
+                });
         case 'doctor':
-            return (
-                `💊 **You are the Doctor!**\n` +
-                `Your goal: protect innocent players.\n\n` +
-                `Each night, use \`/protect @target\` in **DM with me** to protect someone from a Mafia kill.\n` +
-                `Rules:\n` +
-                `• Cannot protect the same person two nights in a row\n` +
-                `• Can self-protect, but only once per game`
-            );
+            return new EmbedBuilder()
+                .setColor(0x00c851)
+                .setTitle('💊 You are the Doctor!')
+                .setDescription('Your goal: keep innocent players alive.')
+                .addFields(
+                    {
+                        name: 'Night Action',
+                        value: 'Use `/protect @target` in **DM with me** to shield someone from a Mafia kill.',
+                    },
+                    {
+                        name: 'Rules',
+                        value: '• Cannot protect the same person two nights in a row\n• Can self-protect, but only once per game',
+                    }
+                );
         case 'civilian':
-            return (
-                `👤 **You are a Civilian!**\n` +
-                `Your goal: help the Town identify the Mafia.\n\n` +
-                `You have no night action. Use the day discussion and your votes wisely!`
-            );
+            return new EmbedBuilder()
+                .setColor(0xffd700)
+                .setTitle('👤 You are a Civilian!')
+                .setDescription('Your goal: help the Town identify and eliminate the Mafia.')
+                .addFields({
+                    name: 'Your Role',
+                    value: 'You have no night action. Listen carefully, discuss, and vote wisely each day!',
+                });
     }
 }
 

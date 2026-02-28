@@ -267,53 +267,54 @@ describe('getRoleDisplayName', () => {
 describe('getRoleCard', () => {
     it('mafia card contains the team names', () => {
         const card = getRoleCard('mafia', ['Alice', 'Bob'], 'playerX');
-        expect(card).toContain('Alice');
-        expect(card).toContain('Bob');
+        const json = JSON.stringify(card.data);
+        expect(json).toContain('Alice');
+        expect(json).toContain('Bob');
     });
 
     it('mafia card says "You are Mafia"', () => {
         const card = getRoleCard('mafia', [], 'playerX');
-        expect(card).toContain('You are Mafia');
+        expect(JSON.stringify(card.data)).toContain('You are Mafia');
     });
 
     it('mafia card with empty team shows "Just you!"', () => {
         const card = getRoleCard('mafia', [], 'playerX');
-        expect(card).toContain('Just you!');
+        expect(JSON.stringify(card.data)).toContain('Just you!');
     });
 
     it('detective card says "You are the Detective"', () => {
         const card = getRoleCard('detective', [], 'playerX');
-        expect(card).toContain('You are the Detective');
+        expect(JSON.stringify(card.data)).toContain('You are the Detective');
     });
 
     it('detective card mentions /investigate', () => {
         const card = getRoleCard('detective', [], 'playerX');
-        expect(card).toContain('/investigate');
+        expect(JSON.stringify(card.data)).toContain('/investigate');
     });
 
     it('doctor card says "You are the Doctor"', () => {
         const card = getRoleCard('doctor', [], 'playerX');
-        expect(card).toContain('You are the Doctor');
+        expect(JSON.stringify(card.data)).toContain('You are the Doctor');
     });
 
     it('doctor card mentions /protect', () => {
         const card = getRoleCard('doctor', [], 'playerX');
-        expect(card).toContain('/protect');
+        expect(JSON.stringify(card.data)).toContain('/protect');
     });
 
     it('doctor card mentions self-protect rule', () => {
         const card = getRoleCard('doctor', [], 'playerX');
-        expect(card.toLowerCase()).toContain('self-protect');
+        expect(JSON.stringify(card.data).toLowerCase()).toContain('self-protect');
     });
 
     it('civilian card says "You are a Civilian"', () => {
         const card = getRoleCard('civilian', [], 'playerX');
-        expect(card).toContain('You are a Civilian');
+        expect(JSON.stringify(card.data)).toContain('You are a Civilian');
     });
 
     it('civilian card mentions no night action', () => {
         const card = getRoleCard('civilian', [], 'playerX');
-        expect(card.toLowerCase()).toContain('no night action');
+        expect(JSON.stringify(card.data).toLowerCase()).toContain('no night action');
     });
 });
 

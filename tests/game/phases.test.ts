@@ -516,7 +516,17 @@ describe('resolveVote', () => {
 
         await resolveVote(game, client as any);
 
-        expect(channel.send).toHaveBeenCalledWith(expect.stringContaining('tie'));
+        expect(channel.send).toHaveBeenCalledWith(
+            expect.objectContaining({
+                embeds: expect.arrayContaining([
+                    expect.objectContaining({
+                        data: expect.objectContaining({
+                            title: expect.stringMatching(/tie/i),
+                        }),
+                    }),
+                ]),
+            })
+        );
     });
 });
 

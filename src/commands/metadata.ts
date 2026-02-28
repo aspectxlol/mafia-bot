@@ -19,12 +19,6 @@ export const ChatCommandMetadata: {
         description_localizations: Lang.getRefLocalizationMap('commandDescs.help'),
         dm_permission: true,
         default_member_permissions: undefined,
-        options: [
-            {
-                ...Args.HELP_OPTION,
-                required: true,
-            },
-        ],
     },
     INFO: {
         type: ApplicationCommandType.ChatInput,
@@ -34,12 +28,6 @@ export const ChatCommandMetadata: {
         description_localizations: Lang.getRefLocalizationMap('commandDescs.info'),
         dm_permission: true,
         default_member_permissions: undefined,
-        options: [
-            {
-                ...Args.INFO_OPTION,
-                required: true,
-            },
-        ],
     },
 
     // ── Mafia game commands ─────────────────────────────────────────────────
