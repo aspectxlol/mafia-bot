@@ -44,6 +44,7 @@ function makeGame(players: Record<string, PlayerState>): GameState {
         lastNightDeath: null,
         lastNightSaved: false,
         gameLog: [],
+        playerLogs: {},
     };
 }
 

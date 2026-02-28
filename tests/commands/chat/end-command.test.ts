@@ -70,6 +70,7 @@ function makeGame(overrides: Partial<GameState> = {}): GameState {
         lastNightDeath: null,
         lastNightSaved: false,
         gameLog: [],
+        playerLogs: {},
         ...overrides,
     };
 }

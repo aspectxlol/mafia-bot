@@ -63,6 +63,7 @@ function makeGame(playerIds: string[], overrides: Partial<GameState> = {}): Game
         lastNightDeath: null,
         lastNightSaved: false,
         gameLog: [],
+        playerLogs: {},
         ...overrides,
     };
 }

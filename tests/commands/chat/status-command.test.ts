@@ -70,6 +70,7 @@ function makeGame(channelId: string, overrides: Partial<GameState> = {}): GameSt
         lastNightDeath: null,
         lastNightSaved: false,
         gameLog: [],
+        playerLogs: {},
         ...overrides,
     };
 }

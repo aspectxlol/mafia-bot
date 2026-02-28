@@ -20,8 +20,7 @@ export class Args {
 
     public static readonly AI_COUNT: APIApplicationCommandBasicOption = {
         name: 'ai',
-        description:
-            'Number of AI players to add, powered by Gemini (fills remaining slots up to 8 total).',
+        description: 'Number of AI players to add (fills remaining slots up to 8 total).',
         type: ApplicationCommandOptionType.Integer,
         min_value: 1,
         max_value: 7,

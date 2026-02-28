@@ -46,12 +46,36 @@ export class ProtectCommand implements Command {
             return;
         }
 
-        const target = intr.options.getUser('target', true);
-        const targetPlayer = game.players[target.id];
+        const targetUser = intr.options.getUser('target', false);
+        const targetNameStr = intr.options.getString('name', false);
 
-        if (!targetPlayer) {
-            await intr.editReply('❌ That player is not in this game.');
+        if (!targetUser && !targetNameStr) {
+            await intr.editReply(
+                '❌ Please specify a target using `@mention` or the `name` option for AI players.'
+            );
             return;
+        }
+
+        let targetPlayer;
+        let targetId: string;
+
+        if (targetNameStr) {
+            const found = Object.values(game.players).find(
+                p => p.name.toLowerCase() === targetNameStr.toLowerCase()
+            );
+            if (!found) {
+                await intr.editReply(`❌ No player named **${targetNameStr}** in this game.`);
+                return;
+            }
+            targetPlayer = found;
+            targetId = found.id;
+        } else {
+            targetId = targetUser!.id;
+            targetPlayer = game.players[targetId];
+            if (!targetPlayer) {
+                await intr.editReply('❌ That player is not in this game.');
+                return;
+            }
         }
 
         if (!targetPlayer.alive) {
@@ -60,7 +84,7 @@ export class ProtectCommand implements Command {
         }
 
         // Rule: cannot protect same person two nights in a row
-        if (doctor.lastProtectedId && doctor.lastProtectedId === target.id) {
+        if (doctor.lastProtectedId && doctor.lastProtectedId === targetId) {
             await intr.editReply(
                 `❌ You cannot protect **${targetPlayer.name}** two nights in a row. Choose someone else.`
             );
@@ -68,7 +92,7 @@ export class ProtectCommand implements Command {
         }
 
         // Rule: can only self-protect once per game
-        if (target.id === intr.user.id) {
+        if (targetId === intr.user.id) {
             if (doctor.selfProtectUsed) {
                 await intr.editReply('❌ You have already used your self-protect this game.');
                 return;
@@ -76,7 +100,7 @@ export class ProtectCommand implements Command {
             doctor.selfProtectUsed = true;
         }
 
-        game.night.protectTarget = target.id;
+        game.night.protectTarget = targetId;
         game.night.actionsReceived.push('protect');
 
         await intr.editReply(`✅ You will protect **${targetPlayer.name}** tonight.`);

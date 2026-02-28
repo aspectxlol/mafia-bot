@@ -1,16 +1,15 @@
 /**
- * AI player support via Google Gemini and Groq (llama).
+ * AI player support via Groq (multiple models for variety).
  *
  * Design: this module ONLY contains AI decision-making logic.
  * It never imports from phases.ts to avoid circular dependencies.
  * Scheduling, Discord sends, and vote resolution stay in phases.ts.
  */
 
-import { GoogleGenerativeAI } from '@google/generative-ai';
 import Groq from 'groq-sdk';
 import { createRequire } from 'node:module';
 
-import { AIProvider, GameState, PlayerState } from './gameState.js';
+import { GameState, PlayerState } from './gameState.js';
 import { Logger } from '../services/index.js';
 
 const require = createRequire(import.meta.url);
@@ -45,19 +44,23 @@ export function logEvent(game: GameState, event: string): void {
     if (game.gameLog.length > 30) game.gameLog.splice(0, game.gameLog.length - 30);
 }
 
-// ─── API clients ─────────────────────────────────────────────────────────────
+// ─── Model rotation ──────────────────────────────────────────────────────────
 
-let geminiClient: GoogleGenerativeAI | null = null;
-let groqClient: Groq | null = null;
+const AI_MODELS = [
+    'qwen/qwen3-32b',
+    'moonshotai/kimi-k2-instruct',
+    'meta-llama/llama-3.3-70b-versatile',
+] as const;
 
-function getGemini(): GoogleGenerativeAI {
-    if (!geminiClient) {
-        const config = require('../../config/config.json') as { geminiApiKey?: string };
-        if (!config.geminiApiKey) throw new Error('geminiApiKey not set in config/config.json');
-        geminiClient = new GoogleGenerativeAI(config.geminiApiKey);
-    }
-    return geminiClient;
+/** Assign a consistent model to a player based on their ID. */
+function pickModel(player: PlayerState): string {
+    const hash = player.id.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
+    return AI_MODELS[hash % AI_MODELS.length];
 }
+
+// ─── Groq client ─────────────────────────────────────────────────────────────
+
+let groqClient: Groq | null = null;
 
 function getGroq(): Groq {
     if (!groqClient) {
@@ -95,6 +98,9 @@ function buildContext(game: GameState, player: PlayerState): string {
         '',
         'RECENT EVENTS:',
         game.gameLog.slice(-12).join('\n') || 'Game just started.',
+        ...(game.playerLogs[player.id]?.length
+            ? ['', 'YOUR PRIVATE NOTES:', ...game.playerLogs[player.id].slice(-6)]
+            : []),
     ];
     return lines.filter(l => l !== '').join('\n');
 }
@@ -102,40 +108,9 @@ function buildContext(game: GameState, player: PlayerState): string {
 const MIN_RETRY_MS = 5_000; // never retry faster than 5 s
 const MAX_RETRIES = 3;
 
-/** Parse retry-after delay in ms from a Gemini 429 error. */
-function parseGeminiRetryDelay(err: unknown): number {
-    if (err && typeof err === 'object') {
-        const details = (err as Record<string, unknown>).errorDetails;
-        if (Array.isArray(details)) {
-            for (const detail of details) {
-                if (
-                    detail &&
-                    typeof detail === 'object' &&
-                    (detail as Record<string, unknown>)['@type'] ===
-                        'type.googleapis.com/google.rpc.RetryInfo'
-                ) {
-                    const raw = (detail as Record<string, unknown>).retryDelay;
-                    if (typeof raw === 'string') {
-                        const seconds = parseFloat(raw);
-                        if (!isNaN(seconds))
-                            return Math.max(Math.ceil(seconds) * 1000, MIN_RETRY_MS);
-                    }
-                }
-            }
-        }
-        const msg = (err as Record<string, unknown>).message;
-        if (typeof msg === 'string') {
-            const m = msg.match(/retry in ([\d.]+)s/i);
-            if (m) return Math.max(Math.ceil(parseFloat(m[1])) * 1000, MIN_RETRY_MS);
-        }
-    }
-    return 60_000;
-}
-
 /** Parse retry-after delay in ms from a Groq 429 error. */
-function parseGroqRetryDelay(err: unknown): number {
+function parseRetryDelay(err: unknown): number {
     if (err && typeof err === 'object') {
-        // Groq SDK attaches response headers; retry-after is in seconds
         const headers = (err as Record<string, unknown>).headers;
         if (headers && typeof headers === 'object') {
             const ra = (headers as Record<string, unknown>)['retry-after'];
@@ -153,44 +128,24 @@ function parseGroqRetryDelay(err: unknown): number {
     return 60_000;
 }
 
-async function askGemini(prompt: string): Promise<string> {
-    const model = getGemini().getGenerativeModel({ model: 'gemini-2.0-flash-lite' });
-    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-        try {
-            const result = await model.generateContent(prompt);
-            return result.response.text().trim();
-        } catch (err) {
-            const status = (err as Record<string, unknown>).status;
-            if (status === 429 && attempt < MAX_RETRIES) {
-                const delay = parseGeminiRetryDelay(err);
-                Logger.warn(
-                    `Gemini rate-limited (attempt ${attempt}/${MAX_RETRIES}). Retrying in ${delay / 1000}s…`,
-                    err
-                );
-                await new Promise(res => setTimeout(res, delay));
-                continue;
-            }
-            Logger.error('Gemini error', err);
-            return '';
-        }
-    }
-    return '';
-}
-
-async function askGroq(prompt: string): Promise<string> {
+async function ask(context: string, task: string, model: string): Promise<string> {
+    const prompt = `${context}\n\nTASK: ${task}\n\nRespond with ONLY what is asked. No extra explanation.`;
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
         try {
             const completion = await getGroq().chat.completions.create({
-                model: 'llama-3.3-70b-versatile',
+                model,
                 messages: [{ role: 'user', content: prompt }],
                 max_tokens: 100,
                 temperature: 0.8,
             });
-            return completion.choices[0]?.message?.content?.trim() ?? '';
+            const raw = (completion.choices[0]?.message?.content ?? '')
+                .replace(/<think>[\s\S]*?<\/think>/gi, '')
+                .trim();
+            return raw;
         } catch (err) {
             const status = (err as Record<string, unknown>).status;
             if (status === 429 && attempt < MAX_RETRIES) {
-                const delay = parseGroqRetryDelay(err);
+                const delay = parseRetryDelay(err);
                 Logger.warn(
                     `Groq rate-limited (attempt ${attempt}/${MAX_RETRIES}). Retrying in ${delay / 1000}s…`,
                     err
@@ -203,15 +158,6 @@ async function askGroq(prompt: string): Promise<string> {
         }
     }
     return '';
-}
-
-async function ask(
-    context: string,
-    task: string,
-    provider: AIProvider = 'gemini'
-): Promise<string> {
-    const prompt = `${context}\n\nTASK: ${task}\n\nRespond with ONLY what is asked. No extra explanation.`;
-    return provider === 'groq' ? askGroq(prompt) : askGemini(prompt);
 }
 
 function pickFromList<T extends { name: string }>(raw: string, candidates: T[]): T {
@@ -233,37 +179,45 @@ export async function runAINightAction(game: GameState, player: PlayerState): Pr
     const alive = Object.values(game.players).filter(p => p.alive);
     const ctx = buildContext(game, player);
 
-    const prov = player.aiProvider ?? 'gemini';
+    const model = pickModel(player);
 
     if (player.role === 'mafia') {
-        if (game.night.actionsReceived.includes('kill')) return; // another mafia already acted
+        if (game.night.actionsReceived.includes('kill')) return;
         const targets = alive.filter(p => p.role !== 'mafia' && p.id !== player.id);
         if (targets.length === 0) return;
+        console.log(
+            `[AI] ${player.name} (mafia, ${model}) choosing kill target from: ${targets.map(p => p.name).join(', ')}`
+        );
         const raw = await ask(
             ctx,
             `It is night. Choose one Town player to eliminate. Options: ${targets.map(p => p.name).join(', ')}. Reply with only the player's exact name.`,
-            prov
+            model
         );
         const target = pickFromList(raw, targets);
+        console.log(`[AI] ${player.name} chose to eliminate ${target.name}`);
         game.night.killTarget = target.id;
         game.night.actionsReceived.push('kill');
-        logEvent(game, `[Night ${game.round}] Mafia targeted someone for elimination`);
     } else if (player.role === 'detective') {
         if (game.night.actionsReceived.includes('investigate')) return;
         const targets = alive.filter(p => p.id !== player.id);
         if (targets.length === 0) return;
+        console.log(
+            `[AI] ${player.name} (detective, ${model}) choosing investigate target from: ${targets.map(p => p.name).join(', ')}`
+        );
         const raw = await ask(
             ctx,
             `It is night. Choose one player to investigate. Options: ${targets.map(p => p.name).join(', ')}. Reply with only the player's exact name.`,
-            prov
+            model
         );
         const target = pickFromList(raw, targets);
+        const isMafia = target.role === 'mafia';
+        console.log(
+            `[AI] ${player.name} investigated ${target.name} → ${isMafia ? 'MAFIA' : 'innocent'}`
+        );
         game.night.investigateTarget = target.id;
         game.night.actionsReceived.push('investigate');
-        const isMafia = target.role === 'mafia';
-        logEvent(
-            game,
-            `[Night ${game.round}] Detective investigated ${target.name}: ${isMafia ? 'MAFIA' : 'not Mafia'}`
+        (game.playerLogs[player.id] ??= []).push(
+            `[Night ${game.round}] You investigated ${target.name}: ${isMafia ? 'MAFIA' : 'not Mafia'}`
         );
     } else if (player.role === 'doctor') {
         if (game.night.actionsReceived.includes('protect')) return;
@@ -273,16 +227,19 @@ export async function runAINightAction(game: GameState, player: PlayerState): Pr
             return true;
         });
         if (targets.length === 0) return;
+        console.log(
+            `[AI] ${player.name} (doctor, ${model}) choosing protect target from: ${targets.map(p => p.name).join(', ')}`
+        );
         const raw = await ask(
             ctx,
             `It is night. Choose one player to protect from a Mafia kill. Options: ${targets.map(p => p.name).join(', ')}. Reply with only the player's exact name.`,
-            prov
+            model
         );
         const target = pickFromList(raw, targets);
+        console.log(`[AI] ${player.name} chose to protect ${target.name}`);
         game.night.protectTarget = target.id;
         game.night.actionsReceived.push('protect');
         if (target.id === player.id) player.selfProtectUsed = true;
-        logEvent(game, `[Night ${game.round}] Doctor chose to protect someone`);
     }
 }
 
@@ -290,12 +247,15 @@ export async function runAINightAction(game: GameState, player: PlayerState): Pr
 
 /** Returns a short discussion message the AI player would say during the day. */
 export async function generateDayMessage(game: GameState, player: PlayerState): Promise<string> {
+    const model = pickModel(player);
     const ctx = buildContext(game, player);
+    console.log(`[AI] ${player.name} (${player.role}, ${model}) generating day message`);
     const text = await ask(
         ctx,
         `It is the day discussion phase. Write ONE short message (1–2 sentences) as a player trying to figure out who the Mafia is. Be natural and conversational. Never break the fourth wall or reveal your role directly.`,
-        player.aiProvider ?? 'gemini'
+        model
     );
+    console.log(`[AI] ${player.name} says: "${text || '(empty, using fallback)'}"`);
     return text || 'Not sure who to trust right now...';
 }
 
@@ -305,11 +265,17 @@ export async function generateDayMessage(game: GameState, player: PlayerState): 
 export async function pickVoteTarget(game: GameState, player: PlayerState): Promise<string | null> {
     const alive = Object.values(game.players).filter(p => p.alive && p.id !== player.id);
     if (alive.length === 0) return null;
+    const model = pickModel(player);
     const ctx = buildContext(game, player);
+    console.log(
+        `[AI] ${player.name} (${player.role}, ${model}) voting from: ${alive.map(p => p.name).join(', ')}`
+    );
     const raw = await ask(
         ctx,
         `It is the voting phase. Vote to eliminate one player. Options: ${alive.map(p => p.name).join(', ')}. Reply with only the player's exact name.`,
-        player.aiProvider ?? 'gemini'
+        model
     );
-    return pickFromList(raw, alive).id;
+    const target = pickFromList(raw, alive);
+    console.log(`[AI] ${player.name} votes to eliminate ${target.name}`);
+    return target.id;
 }

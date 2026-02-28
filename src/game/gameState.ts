@@ -1,17 +1,14 @@
 export type Role = 'mafia' | 'detective' | 'doctor' | 'civilian';
 export type Phase = 'lobby' | 'night' | 'day' | 'vote' | 'ended';
 
-export type AIProvider = 'gemini' | 'groq';
-
 export interface PlayerState {
     id: string;
     name: string;
     role: Role;
     alive: boolean;
     isAI: boolean;
-    aiProvider?: AIProvider; // which LLM backend this AI player uses
     protectedLastNight: boolean;
-    lastProtectedId: string | null; // id of player protected last night
+    lastProtectedId: string | null;
     selfProtectUsed: boolean;
 }
 
@@ -46,7 +43,8 @@ export interface GameState {
     tallyMessageId: string | null;
     lastNightDeath: string | null; // userId of player killed last night
     lastNightSaved: boolean; // true if doctor prevented a kill
-    gameLog: string[]; // event log for AI context
+    gameLog: string[]; // public event log for AI context (all players see this)
+    playerLogs: Record<string, string[]>; // per-player private logs keyed by player ID
 }
 
 let gameCounter = 0;

@@ -36,12 +36,36 @@ export class KillCommand implements Command {
             return;
         }
 
-        const target = intr.options.getUser('target', true);
-        const targetPlayer = game.players[target.id];
+        const targetUser = intr.options.getUser('target', false);
+        const targetNameStr = intr.options.getString('name', false);
 
-        if (!targetPlayer) {
-            await intr.editReply('❌ That player is not in this game.');
+        if (!targetUser && !targetNameStr) {
+            await intr.editReply(
+                '❌ Please specify a target using `@mention` or the `name` option for AI players.'
+            );
             return;
+        }
+
+        let targetPlayer;
+        let targetId: string;
+
+        if (targetNameStr) {
+            const found = Object.values(game.players).find(
+                p => p.name.toLowerCase() === targetNameStr.toLowerCase()
+            );
+            if (!found) {
+                await intr.editReply(`❌ No player named **${targetNameStr}** in this game.`);
+                return;
+            }
+            targetPlayer = found;
+            targetId = found.id;
+        } else {
+            targetId = targetUser!.id;
+            targetPlayer = game.players[targetId];
+            if (!targetPlayer) {
+                await intr.editReply('❌ That player is not in this game.');
+                return;
+            }
         }
 
         if (!targetPlayer.alive) {
@@ -49,13 +73,13 @@ export class KillCommand implements Command {
             return;
         }
 
-        if (target.id === intr.user.id) {
+        if (targetId === intr.user.id) {
             await intr.editReply('❌ You cannot target yourself.');
             return;
         }
 
         // Set kill target (overrides previous entry from any mafia member)
-        game.night.killTarget = target.id;
+        game.night.killTarget = targetId;
 
         // Mark kill as received if not already
         if (!game.night.actionsReceived.includes('kill')) {

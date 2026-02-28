@@ -70,6 +70,7 @@ function makeGame(overrides: Partial<GameState> = {}): GameState {
         lastNightDeath: null,
         lastNightSaved: false,
         gameLog: [],
+        playerLogs: {},
         ...overrides,
     };
 }
@@ -246,5 +247,41 @@ describe('ProtectCommand', () => {
         const intr = makeIntr({ user: { id: 'doc' }, guild: null, targetUser: { id: 'c1' } });
         await cmd.execute(intr as any, null as any);
         expect(resolveNight).toHaveBeenCalledWith(game, intr.client);
+    });
+
+    it('rejects when neither target user nor name is provided', async () => {
+        const game = makeGame();
+        setGame(GAME_CH, game);
+        const intr = makeIntr({ user: { id: 'doc' }, guild: null, noTarget: true });
+        await cmd.execute(intr as any, null as any);
+        expect(intr.editReply).toHaveBeenCalledWith(expect.stringContaining('specify a target'));
+    });
+
+    it('accepts protecting an AI player by name', async () => {
+        const game = makeGame({
+            players: {
+                m1: makePlayer('m1', 'mafia'),
+                doc: makePlayer('doc', 'doctor'),
+                'ai:3:0': { ...makePlayer('ai:3:0', 'civilian'), name: 'Riley', isAI: true },
+            },
+            night: {
+                ...createNightState(),
+                killTarget: 'ai:3:0',
+                actionsReceived: ['kill', 'investigate'],
+            },
+        });
+        setGame(GAME_CH, game);
+        const intr = makeIntr({ user: { id: 'doc' }, guild: null, targetName: 'Riley' });
+        await cmd.execute(intr as any, null as any);
+        expect(game.night.protectTarget).toBe('ai:3:0');
+        expect(game.night.actionsReceived).toContain('protect');
+    });
+
+    it('rejects unknown name for AI targeting', async () => {
+        const game = makeGame();
+        setGame(GAME_CH, game);
+        const intr = makeIntr({ user: { id: 'doc' }, guild: null, targetName: 'Ghost' });
+        await cmd.execute(intr as any, null as any);
+        expect(intr.editReply).toHaveBeenCalledWith(expect.stringContaining('No player named'));
     });
 });

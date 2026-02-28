@@ -54,7 +54,10 @@ export const ChatCommandMetadata: {
         description: Lang.getRef('commandDescs.kill', Language.Default),
         dm_permission: false,
         default_member_permissions: undefined,
-        options: [{ ...Args.TARGET_USER, required: true }],
+        options: [
+            { ...Args.TARGET_USER, required: false },
+            { ...Args.TARGET_NAME, required: false },
+        ],
     },
     INVESTIGATE: {
         type: ApplicationCommandType.ChatInput,
@@ -62,7 +65,10 @@ export const ChatCommandMetadata: {
         description: Lang.getRef('commandDescs.investigate', Language.Default),
         dm_permission: true,
         default_member_permissions: undefined,
-        options: [{ ...Args.TARGET_USER, required: true }],
+        options: [
+            { ...Args.TARGET_USER, required: false },
+            { ...Args.TARGET_NAME, required: false },
+        ],
     },
     PROTECT: {
         type: ApplicationCommandType.ChatInput,
@@ -70,7 +76,10 @@ export const ChatCommandMetadata: {
         description: Lang.getRef('commandDescs.protect', Language.Default),
         dm_permission: true,
         default_member_permissions: undefined,
-        options: [{ ...Args.TARGET_USER, required: true }],
+        options: [
+            { ...Args.TARGET_USER, required: false },
+            { ...Args.TARGET_NAME, required: false },
+        ],
     },
     VOTE: {
         type: ApplicationCommandType.ChatInput,

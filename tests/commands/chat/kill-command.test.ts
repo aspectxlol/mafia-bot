@@ -73,6 +73,7 @@ function makeGame(overrides: Partial<GameState> = {}): GameState {
         lastNightDeath: null,
         lastNightSaved: false,
         gameLog: [],
+        playerLogs: {},
         ...overrides,
     };
 }
@@ -249,5 +250,43 @@ describe('KillCommand', () => {
         expect(game.night.killTarget).toBe('c1');
         // actionsReceived should not have duplicate 'kill'
         expect(game.night.actionsReceived.filter(a => a === 'kill')).toHaveLength(1);
+    });
+
+    it('rejects when neither target user nor name is provided', async () => {
+        const game = makeGame();
+        setGame(GAME_CH, game);
+        const intr = makeIntr({ channelId: MAFIA_CH, user: { id: 'm1' }, noTarget: true });
+        await cmd.execute(intr as any, null as any);
+        expect(intr.editReply).toHaveBeenCalledWith(expect.stringContaining('specify a target'));
+    });
+
+    it('accepts targeting an AI player by name', async () => {
+        const game = makeGame({
+            players: {
+                m1: makePlayer('m1', 'mafia'),
+                'ai:1:1': { ...makePlayer('ai:1:1', 'civilian'), name: 'Aria', isAI: true },
+            },
+        });
+        setGame(GAME_CH, game);
+        const intr = makeIntr({
+            channelId: MAFIA_CH,
+            user: { id: 'm1' },
+            targetName: 'Aria',
+        });
+        await cmd.execute(intr as any, null as any);
+        expect(game.night.killTarget).toBe('ai:1:1');
+        expect(game.night.actionsReceived).toContain('kill');
+    });
+
+    it('rejects unknown name for AI targeting', async () => {
+        const game = makeGame();
+        setGame(GAME_CH, game);
+        const intr = makeIntr({
+            channelId: MAFIA_CH,
+            user: { id: 'm1' },
+            targetName: 'NoSuchPlayer',
+        });
+        await cmd.execute(intr as any, null as any);
+        expect(intr.editReply).toHaveBeenCalledWith(expect.stringContaining('No player named'));
     });
 });

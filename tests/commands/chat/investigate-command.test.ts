@@ -70,6 +70,7 @@ function makeGame(overrides: Partial<GameState> = {}): GameState {
         lastNightDeath: null,
         lastNightSaved: false,
         gameLog: [],
+        playerLogs: {},
         ...overrides,
     };
 }
@@ -252,5 +253,52 @@ describe('InvestigateCommand', () => {
         });
         await cmd.execute(intr as any, null as any);
         expect(resolveNight).not.toHaveBeenCalled();
+    });
+
+    it('rejects when neither target user nor name is provided', async () => {
+        const game = makeGame();
+        setGame(GAME_CH, game);
+        const intr = makeIntr({
+            channelId: 'dmch',
+            user: { id: 'det' },
+            guild: null,
+            noTarget: true,
+        });
+        await cmd.execute(intr as any, null as any);
+        expect(intr.editReply).toHaveBeenCalledWith(expect.stringContaining('specify a target'));
+    });
+
+    it('accepts targeting an AI player by name', async () => {
+        const game = makeGame({
+            players: {
+                m1: makePlayer('m1', 'mafia'),
+                det: makePlayer('det', 'detective'),
+                'ai:2:0': { ...makePlayer('ai:2:0', 'civilian'), name: 'Morgan', isAI: true },
+            },
+            night: { ...createNightState(), killTarget: 'ai:2:0', actionsReceived: ['kill'] },
+        });
+        setGame(GAME_CH, game);
+        const intr = makeIntr({
+            channelId: 'dmch',
+            user: { id: 'det' },
+            guild: null,
+            targetName: 'Morgan',
+        });
+        await cmd.execute(intr as any, null as any);
+        expect(game.night.investigateTarget).toBe('ai:2:0');
+        expect(game.night.actionsReceived).toContain('investigate');
+    });
+
+    it('rejects unknown name for AI targeting', async () => {
+        const game = makeGame();
+        setGame(GAME_CH, game);
+        const intr = makeIntr({
+            channelId: 'dmch',
+            user: { id: 'det' },
+            guild: null,
+            targetName: 'Ghost',
+        });
+        await cmd.execute(intr as any, null as any);
+        expect(intr.editReply).toHaveBeenCalledWith(expect.stringContaining('No player named'));
     });
 });

@@ -29,8 +29,13 @@ export interface FakeInteraction {
 }
 
 export function makeIntr(
-    overrides: Partial<FakeInteraction> & { targetUser?: FakeUser; targetName?: string | null } = {}
+    overrides: Partial<FakeInteraction> & {
+        targetUser?: FakeUser;
+        targetName?: string | null;
+        noTarget?: boolean;
+    } = {}
 ): FakeInteraction {
+    const noTarget = overrides.noTarget === true;
     const target = overrides.targetUser ?? { id: 'target1' };
     const targetName = overrides.targetName !== undefined ? overrides.targetName : null;
     return {
@@ -42,10 +47,8 @@ export function makeIntr(
         options: {
             getUser: vi
                 .fn()
-                .mockImplementation((_name: string, required?: boolean) =>
-                    targetName !== null ? null : target
-                ),
-            getString: vi.fn().mockReturnValue(targetName),
+                .mockImplementation(() => (noTarget || targetName !== null ? null : target)),
+            getString: vi.fn().mockReturnValue(noTarget ? null : targetName),
         },
         client: {
             channels: {

@@ -58,6 +58,7 @@ function gameWithNPlayers(n: number): GameState {
         lastNightDeath: null,
         lastNightSaved: false,
         gameLog: [],
+        playerLogs: {},
     };
 }
 

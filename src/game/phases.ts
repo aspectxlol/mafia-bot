@@ -382,9 +382,8 @@ export async function resolveNight(game: GameState, client: Client): Promise<voi
         if (detective) {
             const target = game.players[investigateTarget];
             const isMafia = target?.role === 'mafia';
-            logEvent(
-                game,
-                `[Night ${game.round}] Detective investigated ${target?.name ?? '?'}: ${isMafia ? 'MAFIA' : 'innocent'}`
+            (game.playerLogs[detective.id] ??= []).push(
+                `[Night ${game.round}] You investigated ${target?.name ?? '?'}: ${isMafia ? 'MAFIA' : 'not Mafia'}`
             );
             if (!detective.isAI) {
                 await sendDM(
@@ -406,10 +405,7 @@ export async function resolveNight(game: GameState, client: Client): Promise<voi
     game.lastNightSaved = saved;
 
     if (saved) {
-        logEvent(
-            game,
-            `[Night ${game.round}] Doctor saved ${game.players[protectTarget!]?.name ?? '?'} from Mafia kill`
-        );
+        logEvent(game, `[Night ${game.round}] Doctor saved someone from a Mafia kill`);
     } else if (killed) {
         logEvent(game, `[Night ${game.round}] ${killed.name} was killed by Mafia`);
     } else {

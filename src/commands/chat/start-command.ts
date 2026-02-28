@@ -145,7 +145,6 @@ export class StartCommand implements Command {
 
         // ── Add AI players ─────────────────────────────────────────────────────
         const shuffledAINames = [...AI_NAMES].sort(() => Math.random() - 0.5);
-        const aiProviders: Array<'gemini' | 'groq'> = ['gemini', 'groq'];
         for (let i = 0; i < aiCount; i++) {
             const aiId = newAIId(gameNumber, i + 1);
             players[aiId] = {
@@ -154,7 +153,6 @@ export class StartCommand implements Command {
                 role: 'civilian', // placeholder
                 alive: true,
                 isAI: true,
-                aiProvider: aiProviders[i % aiProviders.length], // alternate Gemini / Groq
                 protectedLastNight: false,
                 lastProtectedId: null,
                 selfProtectUsed: false,
@@ -187,6 +185,7 @@ export class StartCommand implements Command {
             lastNightDeath: null,
             lastNightSaved: false,
             gameLog: [],
+            playerLogs: {},
         };
 
         setGame(gameChannel.id, gameState);
