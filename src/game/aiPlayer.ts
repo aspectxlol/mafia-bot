@@ -48,11 +48,32 @@ export function logEvent(game: GameState, event: string): void {
 
 const AI_MODELS = [
     'qwen/qwen3-32b',
-    'moonshotai/kimi-k2-instruct',
-    'meta-llama/llama-3.3-70b-versatile',
+    'moonshotai/kimi-k2-instruct-0905',
+    'llama-3.3-70b-versatile',
 ] as const;
 
+// ─── AI color helpers ──────────────────────────────────────────────────────
+const AI_COLORS = [
+    '\x1b[36m', // cyan
+    '\x1b[35m', // magenta
+    '\x1b[33m', // yellow
+    '\x1b[32m', // green
+    '\x1b[34m', // blue
+    '\x1b[31m', // red
+    '\x1b[37m', // white
+    '\x1b[90m', // gray
+    '\x1b[96m', // bright cyan
+    '\x1b[95m', // bright magenta
+];
 /** Assign a consistent model to a player based on their ID. */
+function aiColor(name: string): string {
+    const idx = AI_NAMES.indexOf(name);
+    return AI_COLORS[idx % AI_COLORS.length] || '\x1b[36m';
+}
+const RESET = '\x1b[0m';
+function aiDivider(name: string): string {
+    return `${aiColor(name)}\n──────────────────────────────────────────────────────────────${RESET}`;
+}
 function pickModel(player: PlayerState): string {
     const hash = player.id.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
     return AI_MODELS[hash % AI_MODELS.length];
@@ -97,7 +118,7 @@ function buildContext(game: GameState, player: PlayerState): string {
             : '',
         '',
         'RECENT EVENTS:',
-        game.gameLog.slice(-12).join('\n') || 'Game just started.',
+        game.gameLog.join('\n') || 'Game just started.',
         ...(game.playerLogs[player.id]?.length
             ? ['', 'YOUR PRIVATE NOTES:', ...game.playerLogs[player.id].slice(-6)]
             : []),
@@ -135,11 +156,12 @@ async function ask(context: string, task: string, model: string): Promise<string
             const completion = await getGroq().chat.completions.create({
                 model,
                 messages: [{ role: 'user', content: prompt }],
-                max_tokens: 100,
+                max_tokens: 512,
                 temperature: 0.8,
             });
             const raw = (completion.choices[0]?.message?.content ?? '')
-                .replace(/<think>[\s\S]*?<\/think>/gi, '')
+                .replace(/grounded[\s\S]*?<\/think>/gi, '') // strip complete think blocks
+                .replace(/grounded[\s\S]*/i, '') // strip truncated (unclosed) think block
                 .trim();
             return raw;
         } catch (err) {
@@ -178,6 +200,9 @@ function pickFromList<T extends { name: string }>(raw: string, candidates: T[]):
 export async function runAINightAction(game: GameState, player: PlayerState): Promise<void> {
     const alive = Object.values(game.players).filter(p => p.alive);
     const ctx = buildContext(game, player);
+    console.log(`================================`);
+    console.log(`[AI] ${player.name} (${player.role}, ${pickModel(player)}) taking night action`);
+    console.log(`[AI] ${player.name} context: ${ctx}`);
 
     const model = pickModel(player);
 
@@ -185,8 +210,9 @@ export async function runAINightAction(game: GameState, player: PlayerState): Pr
         if (game.night.actionsReceived.includes('kill')) return;
         const targets = alive.filter(p => p.role !== 'mafia' && p.id !== player.id);
         if (targets.length === 0) return;
+        console.log(aiDivider(player.name));
         console.log(
-            `[AI] ${player.name} (mafia, ${model}) choosing kill target from: ${targets.map(p => p.name).join(', ')}`
+            `${aiColor(player.name)}[AI] ${player.name} (mafia, ${model}) choosing kill target from: ${targets.map(p => p.name).join(', ')}`
         );
         const raw = await ask(
             ctx,
@@ -194,15 +220,18 @@ export async function runAINightAction(game: GameState, player: PlayerState): Pr
             model
         );
         const target = pickFromList(raw, targets);
-        console.log(`[AI] ${player.name} chose to eliminate ${target.name}`);
+        console.log(
+            `${aiColor(player.name)}[AI] ${player.name} chose to eliminate ${target.name}${RESET}`
+        );
         game.night.killTarget = target.id;
         game.night.actionsReceived.push('kill');
     } else if (player.role === 'detective') {
         if (game.night.actionsReceived.includes('investigate')) return;
         const targets = alive.filter(p => p.id !== player.id);
         if (targets.length === 0) return;
+        console.log(aiDivider(player.name));
         console.log(
-            `[AI] ${player.name} (detective, ${model}) choosing investigate target from: ${targets.map(p => p.name).join(', ')}`
+            `${aiColor(player.name)}[AI] ${player.name} (detective, ${model}) choosing investigate target from: ${targets.map(p => p.name).join(', ')}${RESET}`
         );
         const raw = await ask(
             ctx,
@@ -211,8 +240,9 @@ export async function runAINightAction(game: GameState, player: PlayerState): Pr
         );
         const target = pickFromList(raw, targets);
         const isMafia = target.role === 'mafia';
+        console.log(aiDivider(player.name));
         console.log(
-            `[AI] ${player.name} investigated ${target.name} → ${isMafia ? 'MAFIA' : 'innocent'}`
+            `${aiColor(player.name)}[AI] ${player.name} investigated ${target.name} → ${isMafia ? 'MAFIA' : 'innocent'}${RESET}`
         );
         game.night.investigateTarget = target.id;
         game.night.actionsReceived.push('investigate');
@@ -227,8 +257,9 @@ export async function runAINightAction(game: GameState, player: PlayerState): Pr
             return true;
         });
         if (targets.length === 0) return;
+        console.log(aiDivider(player.name));
         console.log(
-            `[AI] ${player.name} (doctor, ${model}) choosing protect target from: ${targets.map(p => p.name).join(', ')}`
+            `${aiColor(player.name)}[AI] ${player.name} (doctor, ${model}) choosing protect target from: ${targets.map(p => p.name).join(', ')}${RESET}`
         );
         const raw = await ask(
             ctx,
@@ -236,10 +267,16 @@ export async function runAINightAction(game: GameState, player: PlayerState): Pr
             model
         );
         const target = pickFromList(raw, targets);
-        console.log(`[AI] ${player.name} chose to protect ${target.name}`);
+        console.log(aiDivider(player.name));
+        console.log(
+            `${aiColor(player.name)}[AI] ${player.name} chose to protect ${target.name}${RESET}`
+        );
         game.night.protectTarget = target.id;
         game.night.actionsReceived.push('protect');
         if (target.id === player.id) player.selfProtectUsed = true;
+        (game.playerLogs[player.id] ??= []).push(
+            `[Night ${game.round}] You chose to protect ${target.name}`
+        );
     }
 }
 
@@ -249,7 +286,15 @@ export async function runAINightAction(game: GameState, player: PlayerState): Pr
 export async function generateDayMessage(game: GameState, player: PlayerState): Promise<string> {
     const model = pickModel(player);
     const ctx = buildContext(game, player);
-    console.log(`[AI] ${player.name} (${player.role}, ${model}) generating day message`);
+    console.log(`================================`);
+    console.log(
+        `[AI] ${player.name} (${player.role}, ${pickModel(player)}) generating day message`
+    );
+    console.log(aiDivider(player.name));
+    console.log(
+        `${aiColor(player.name)}[AI] ${player.name} (${player.role}, ${model}) generating day message${RESET}`
+    );
+    console.log(`[AI] ${player.name} context: ${ctx}`);
     const text = await ask(
         ctx,
         `It is the day discussion phase. Write ONE short message (1–2 sentences) as a player trying to figure out who the Mafia is. Be natural and conversational. Never break the fourth wall or reveal your role directly.`,
@@ -267,8 +312,9 @@ export async function pickVoteTarget(game: GameState, player: PlayerState): Prom
     if (alive.length === 0) return null;
     const model = pickModel(player);
     const ctx = buildContext(game, player);
+    console.log(aiDivider(player.name));
     console.log(
-        `[AI] ${player.name} (${player.role}, ${model}) voting from: ${alive.map(p => p.name).join(', ')}`
+        `${aiColor(player.name)}[AI] ${player.name} (${player.role}, ${model}) voting from: ${alive.map(p => p.name).join(', ')}${RESET}`
     );
     const raw = await ask(
         ctx,

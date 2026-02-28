@@ -231,13 +231,12 @@ describe('runAINightAction – mafia', () => {
         expect(game.night.killTarget).toBe('c1'); // unchanged
     });
 
-    it('logs a game event after acting', async () => {
+    it('does not add a premature gameLog entry (kill is secret until night resolves)', async () => {
         const game = makeGame();
         mockGroqResponse('Eve');
         await runAINightAction(game, game.players['m1']);
-        expect(
-            game.gameLog.some(e => e.includes('Night') && e.toLowerCase().includes('mafia'))
-        ).toBe(true);
+        // Mafia kill target must not be broadcast to the shared log before night resolves
+        expect(game.gameLog.some(e => e.toLowerCase().includes('mafia'))).toBe(false);
     });
 
     it('falls back to a random target when AI returns a nonsense name', async () => {
@@ -306,18 +305,20 @@ describe('runAINightAction – detective', () => {
         expect(game.night.investigateTarget).toBe('c1');
     });
 
-    it('logs the investigation result (found Mafia)', async () => {
+    it('logs the investigation result (found Mafia) to playerLogs, not gameLog', async () => {
         const game = makeGame();
         mockGroqResponse('Alice'); // Alice is mafia
         await runAINightAction(game, game.players['d1']);
-        expect(game.gameLog.some(e => e.includes('MAFIA'))).toBe(true);
+        expect(game.playerLogs['d1']?.some(e => e.includes('MAFIA'))).toBe(true);
+        expect(game.gameLog.some(e => e.includes('MAFIA'))).toBe(false);
     });
 
-    it('logs the investigation result (innocent)', async () => {
+    it('logs the investigation result (innocent) to playerLogs, not gameLog', async () => {
         const game = makeGame();
         mockGroqResponse('Dave'); // Dave is civilian
         await runAINightAction(game, game.players['d1']);
-        expect(game.gameLog.some(e => e.includes('not Mafia'))).toBe(true);
+        expect(game.playerLogs['d1']?.some(e => e.includes('not Mafia'))).toBe(true);
+        expect(game.gameLog.some(e => e.includes('not Mafia'))).toBe(false);
     });
 
     it('does not investigate self', async () => {
@@ -391,11 +392,12 @@ describe('runAINightAction – doctor', () => {
         expect(game.night.protectTarget).not.toBe('doc1');
     });
 
-    it('logs a protect event', async () => {
+    it('logs a protect event to playerLogs, not gameLog', async () => {
         const game = makeGame();
         mockGroqResponse('Dave');
         await runAINightAction(game, game.players['doc1']);
-        expect(game.gameLog.some(e => e.toLowerCase().includes('doctor'))).toBe(true);
+        expect(game.playerLogs['doc1']?.some(e => e.toLowerCase().includes('protect'))).toBe(true);
+        expect(game.gameLog.some(e => e.toLowerCase().includes('doctor'))).toBe(false);
     });
 
     it('does nothing if there are no valid targets', async () => {
@@ -752,7 +754,7 @@ describe('night sequence integration', () => {
         expect(mockGroqCreate).toHaveBeenCalledTimes(1);
     });
 
-    it('gameLog accumulates events from all roles acting', async () => {
+    it('private role logs accumulate in playerLogs, not in shared gameLog', async () => {
         const game = makeGame();
         mockGroqResponse('Dave');
         await runAINightAction(game, game.players['m1']);
@@ -761,6 +763,12 @@ describe('night sequence integration', () => {
         mockGroqResponse('Dave');
         await runAINightAction(game, game.players['doc1']);
 
-        expect(game.gameLog.length).toBe(3);
+        // Nothing leaks to the shared log during night
+        expect(game.gameLog.length).toBe(0);
+        // Each role's private info is visible only to them
+        expect(game.playerLogs['d1']?.length).toBeGreaterThan(0);
+        expect(game.playerLogs['doc1']?.length).toBeGreaterThan(0);
+        // Mafia has no private log (their kill becomes public when night resolves)
+        expect(game.playerLogs['m1']).toBeUndefined();
     });
 });

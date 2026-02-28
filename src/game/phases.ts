@@ -29,11 +29,11 @@ import { checkWin } from './winCheck.js';
 import { Logger } from '../services/index.js';
 
 // ─── Timings ────────────────────────────────────────────────────────────────
-const NIGHT_MS = 2 * 60 * 1000;
-const NIGHT_WARN_MS = 1 * 60 * 1000;
+const NIGHT_MS = 120 * 1000;
+const NIGHT_WARN_MS = 60 * 1000;
 const DAY_MS = 5 * 60 * 1000;
-const VOTE_MS = 2 * 60 * 1000;
-const VOTE_WARN_MS = 1 * 60 * 1000;
+const VOTE_MS = 120 * 1000;
+const VOTE_WARN_MS = 60 * 1000;
 
 // ─── Webhook cache (one per game channel) ───────────────────────────────────
 const gameWebhooks = new Map<string, WebhookClient>();
@@ -164,7 +164,7 @@ export async function launchGame(game: GameState, client: Client): Promise<void>
 
     // ── Log game start ───────────────────────────────────────────────────────
     const allNames = Object.values(game.players)
-        .map(p => `${p.name}(${p.role})`)
+        .map(p => p.name)
         .join(', ');
     logEvent(game, `[Game Start] Players: ${allNames}`);
 
@@ -226,11 +226,9 @@ export async function startNightPhase(game: GameState, client: Client): Promise<
         .setDescription(
             `The town falls asleep...\n\n` +
                 `**Alive players:**\n${aliveList}\n\n` +
-                `Check your DMs for your night action.`
-        )
-        .setFooter({
-            text: `☀️ Day begins ${time(nightEndsAt, 'R')} — actions auto-resolve at the end`,
-        });
+                `Check your DMs for your night action. \n` +
+                `☀️ Day begins ${time(nightEndsAt, 'R')} — actions auto-resolve at the end`
+        );
 
     await channel.send({ embeds: [embed] });
 
@@ -301,8 +299,8 @@ export async function startNightPhase(game: GameState, client: Client): Promise<
     const aiNightPlayers = alivePlayers.filter(p => isAIId(p.id) && p.role !== 'civilian');
     for (let idx = 0; idx < aiNightPlayers.length; idx++) {
         const aiPlayer = aiNightPlayers[idx];
-        // Stagger: 20–35 s for first, each subsequent adds 40 s
-        const delay = 20_000 + idx * 40_000 + Math.random() * 15_000;
+        // Stagger: 10s for first, each subsequent adds 10s
+        const delay = 1_000 + idx * 10_000 + Math.random() * 2_000;
         setTimeout(async () => {
             const g = getGame(game.gameChannelId);
             if (!g || g.phase !== 'night') return;
@@ -475,8 +473,8 @@ export async function startDayPhase(game: GameState, client: Client): Promise<vo
     for (const aiPlayer of aiAlive) {
         const msgCount = 1 + (Math.random() < 0.5 ? 1 : 0);
         for (let i = 0; i < msgCount; i++) {
-            // Each slot is ~75 s apart; first message starts at 15–30 s
-            const delay = 15_000 + globalMsgSlot * 75_000 + Math.random() * 15_000;
+            // Each slot is ~15s apart; first message starts at 8–15s
+            const delay = 3_000 + globalMsgSlot * 15_000 + Math.random() * 3_000;
             globalMsgSlot++;
             setTimeout(async () => {
                 const g = getGame(game.gameChannelId);
@@ -530,7 +528,7 @@ export async function startVotePhase(game: GameState, client: Client): Promise<v
                 `Voting closes ${time(voteEndsAt, 'R')}\n\n` +
                 `**Alive players:**\n${alivePlayers.map(p => `• ${p.name}`).join('\n')}`
         )
-        .addFields({ name: 'Current Tally', value: 'No votes yet' })
+        .addFields({ name: '📊 Vote Tally', value: 'No votes yet' })
         .setFooter({
             text: `Most votes = eliminated. Tie = no elimination. Closes ${time(voteEndsAt, 'T')}`,
         });
@@ -542,8 +540,8 @@ export async function startVotePhase(game: GameState, client: Client): Promise<v
     const aiAliveVote = alivePlayers.filter(p => isAIId(p.id));
     for (let idx = 0; idx < aiAliveVote.length; idx++) {
         const aiPlayer = aiAliveVote[idx];
-        // Stagger: first votes at 15–25 s, each subsequent adds 35 s
-        const delay = 15_000 + idx * 35_000 + Math.random() * 10_000;
+        // Stagger: 10s for first, each subsequent adds 10s
+        const delay = 1_000 + idx * 10_000 + Math.random() * 2_000;
         setTimeout(async () => {
             const g = getGame(game.gameChannelId);
             if (!g || g.phase !== 'vote') return;
@@ -552,7 +550,6 @@ export async function startVotePhase(game: GameState, client: Client): Promise<v
             const targetId = await pickVoteTarget(g, p);
             if (!targetId) return;
             g.vote.votes[p.id] = targetId;
-            logEvent(g, `[Vote] ${p.name} voted for ${g.players[targetId]?.name ?? targetId}`);
             await updateVoteTally(g, client);
             const allAlive = Object.values(g.players).filter(pp => pp.alive);
             if (allAlive.every(pp => g.vote.votes[pp.id] !== undefined)) {
@@ -610,25 +607,18 @@ export async function updateVoteTally(game: GameState, client: Client): Promise<
             .map(p => `• **${p.name}**: ${tally[p.id] ?? 0} vote(s)`)
             .join('\n');
 
-        const voteLines =
-            Object.entries(game.vote.votes)
-                .map(
-                    ([vid, tid]) =>
-                        `${game.players[vid]?.name ?? '?'} → ${game.players[tid]?.name ?? '?'}`
-                )
-                .join('\n') || 'No votes yet';
+        const votedCount = Object.keys(game.vote.votes).length;
+        const totalCount = alivePlayers.length;
 
         const embed = new EmbedBuilder()
             .setColor(0xff6600)
             .setTitle('🗳️ Voting Phase — Live Tally')
             .setDescription(
-                `Use \`/vote @player\` to cast or change your vote.\n\n` +
+                `Use \`/vote @player\` to cast or change your vote.\n` +
+                    `**${votedCount}/${totalCount}** players have voted.\n\n` +
                     `**Alive players:**\n${alivePlayers.map(p => `• ${p.name}`).join('\n')}`
             )
-            .addFields(
-                { name: 'Votes', value: tallyLines || 'No votes' },
-                { name: 'Who voted for whom', value: voteLines }
-            );
+            .addFields({ name: '📊 Vote Tally', value: tallyLines || 'No votes' });
 
         await msg.edit({ embeds: [embed] });
     } catch (err) {
@@ -679,6 +669,10 @@ export async function resolveVote(game: GameState, client: Client): Promise<void
             const eliminated = game.players[topId];
             if (eliminated) {
                 eliminated.alive = false;
+                logEvent(
+                    game,
+                    `[Day ${game.round}] ${eliminated.name} was eliminated by vote (was ${getRoleDisplayName(eliminated.role)})`
+                );
                 await channel.send({
                     embeds: [
                         new EmbedBuilder()
