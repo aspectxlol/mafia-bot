@@ -114,3 +114,5 @@ export function buildRoleListText(game: GameState): string {
         .filter(Boolean)
         .join('\n');
 }
+
+export { Role };
