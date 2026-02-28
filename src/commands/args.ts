@@ -12,6 +12,12 @@ export class Args {
         type: ApplicationCommandOptionType.User,
     };
 
+    public static readonly TARGET_NAME: APIApplicationCommandBasicOption = {
+        name: 'name',
+        description: 'Name of an AI player to vote for (use this instead of @ for AI players)',
+        type: ApplicationCommandOptionType.String,
+    };
+
     public static readonly AI_COUNT: APIApplicationCommandBasicOption = {
         name: 'ai',
         description:

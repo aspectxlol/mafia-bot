@@ -523,6 +523,24 @@ describe('retry logic (rate-limit)', () => {
         expect(delays.some(d => d >= 20_000)).toBe(true);
     });
 
+    it('enforces a minimum 5 s delay when retryDelay is "0s" (daily quota exhausted)', async () => {
+        const game = makeGame();
+        const advanceSpy = vi.spyOn(global, 'setTimeout');
+        mockGenerateContent
+            .mockRejectedValueOnce(make429('0s')) // API says "retry immediately" but daily limit is 0
+            .mockResolvedValueOnce({ response: { text: () => 'Dave' } });
+
+        const promise = runAINightAction(game, game.players['m1']);
+        await vi.runAllTimersAsync();
+        await promise;
+
+        const delays = advanceSpy.mock.calls.map(c => c[1] as number);
+        // Must wait at least 5 s even though retryDelay said 0 s
+        expect(delays.some(d => d >= 5_000)).toBe(true);
+        // And it should have still retried successfully
+        expect(game.night.killTarget).not.toBeNull();
+    });
+
     it('exhausts all retries and falls back to empty / random', async () => {
         const game = makeGame();
         mockGenerateContent

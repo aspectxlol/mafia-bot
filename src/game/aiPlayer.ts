@@ -90,6 +90,8 @@ function buildContext(game: GameState, player: PlayerState): string {
 
 /** Parse the retry-after delay (in ms) from a Gemini 429 error, defaulting to 60 s. */
 function parseRetryDelay(err: unknown): number {
+    const MIN_RETRY_MS = 5_000; // never retry faster than 5 s even if API says 0 s
+
     if (err && typeof err === 'object') {
         // SDK attaches errorDetails array on the error object
         const details = (err as Record<string, unknown>).errorDetails;
@@ -103,18 +105,19 @@ function parseRetryDelay(err: unknown): number {
                 ) {
                     const raw = (detail as Record<string, unknown>).retryDelay;
                     if (typeof raw === 'string') {
-                        // Format is e.g. "54s" or "54.362714374s"
+                        // Format is e.g. "54s" or "54.362714374s" or "0s"
                         const seconds = parseFloat(raw);
-                        if (!isNaN(seconds)) return Math.ceil(seconds) * 1000;
+                        if (!isNaN(seconds))
+                            return Math.max(Math.ceil(seconds) * 1000, MIN_RETRY_MS);
                     }
                 }
             }
         }
-        // Fallback: parse from message string "Please retry in N s."
+        // Fallback: parse from message string "Please retry in Ns."
         const msg = (err as Record<string, unknown>).message;
         if (typeof msg === 'string') {
             const m = msg.match(/retry in ([\d.]+)s/i);
-            if (m) return Math.ceil(parseFloat(m[1])) * 1000;
+            if (m) return Math.max(Math.ceil(parseFloat(m[1])) * 1000, MIN_RETRY_MS);
         }
     }
     return 60_000; // conservative default
@@ -135,7 +138,8 @@ async function ask(context: string, task: string): Promise<string> {
             if (status === 429 && attempt < MAX_RETRIES) {
                 const delay = parseRetryDelay(err);
                 Logger.warn(
-                    `Gemini rate-limited (attempt ${attempt}/${MAX_RETRIES}). Retrying in ${delay / 1000}s…`
+                    `Gemini rate-limited (attempt ${attempt}/${MAX_RETRIES}). Retrying in ${delay / 1000}s…`,
+                    err
                 );
                 await new Promise(res => setTimeout(res, delay));
                 continue;

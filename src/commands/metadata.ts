@@ -78,7 +78,10 @@ export const ChatCommandMetadata: {
         description: Lang.getRef('commandDescs.vote', Language.Default),
         dm_permission: false,
         default_member_permissions: undefined,
-        options: [{ ...Args.TARGET_USER, required: true }],
+        options: [
+            { ...Args.TARGET_USER, required: false },
+            { ...Args.TARGET_NAME, required: false },
+        ],
     },
     STATUS: {
         type: ApplicationCommandType.ChatInput,

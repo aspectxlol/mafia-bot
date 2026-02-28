@@ -1,4 +1,11 @@
-import { ChannelType, Client, EmbedBuilder, PermissionFlagsBits, TextChannel } from 'discord.js';
+import {
+    ChannelType,
+    Client,
+    EmbedBuilder,
+    PermissionFlagsBits,
+    TextChannel,
+    WebhookClient,
+} from 'discord.js';
 
 import {
     clearTimers,
@@ -26,6 +33,38 @@ const NIGHT_WARN_MS = 1 * 60 * 1000;
 const DAY_MS = 5 * 60 * 1000;
 const VOTE_MS = 2 * 60 * 1000;
 const VOTE_WARN_MS = 1 * 60 * 1000;
+
+// ─── Webhook cache (one per game channel) ───────────────────────────────────
+const gameWebhooks = new Map<string, WebhookClient>();
+
+/** Returns an avatar URL for an AI player using DiceBear bottts style. */
+function aiAvatarUrl(name: string): string {
+    return `https://api.dicebear.com/9.x/bottts-neutral/png?seed=${encodeURIComponent(name)}&size=128`;
+}
+
+/**
+ * Lazily creates (or reuses) a webhook for the given channel.
+ * The webhook is named after the game so multiple concurrent games don’t clash.
+ */
+async function getOrCreateWebhook(
+    channel: TextChannel,
+    gameNumber: number
+): Promise<WebhookClient | null> {
+    const cached = gameWebhooks.get(channel.id);
+    if (cached) return cached;
+    try {
+        const hook = await channel.createWebhook({
+            name: `Mafia Game #${gameNumber}`,
+            reason: 'AI player chat webhook',
+        });
+        const client = new WebhookClient({ id: hook.id, token: hook.token! });
+        gameWebhooks.set(channel.id, client);
+        return client;
+    } catch (err) {
+        Logger.error('Failed to create AI webhook', err);
+        return null;
+    }
+}
 
 // ─── DM helper ──────────────────────────────────────────────────────────────
 export async function sendDM(
@@ -178,6 +217,8 @@ export async function startNightPhase(game: GameState, client: Client): Promise<
     const alivePlayers = Object.values(game.players).filter(p => p.alive);
     const aliveList = alivePlayers.map(p => `• ${p.name}`).join('\n');
 
+    const nightEndsAt = Math.floor((Date.now() + NIGHT_MS) / 1000);
+
     const embed = new EmbedBuilder()
         .setColor(0x1a0033)
         .setTitle(`🌙 Night ${game.round} begins`)
@@ -187,7 +228,7 @@ export async function startNightPhase(game: GameState, client: Client): Promise<
                 `Check your DMs for your night action.`
         )
         .setFooter({
-            text: `${NIGHT_MS / 60000} minutes until day — actions auto-resolve at the end`,
+            text: `☀️ Day begins <t:${nightEndsAt}:R> — actions auto-resolve at the end`,
         });
 
     await channel.send({ embeds: [embed] });
@@ -412,6 +453,8 @@ export async function startDayPhase(game: GameState, client: Client): Promise<vo
         deathLine = '☀️ **Day begins.** No one was eliminated last night.';
     }
 
+    const voteStartsAt = Math.floor((Date.now() + DAY_MS) / 1000);
+
     const embed = new EmbedBuilder()
         .setColor(0xffd700)
         .setTitle(`☀️ Day ${game.round}`)
@@ -419,14 +462,15 @@ export async function startDayPhase(game: GameState, client: Client): Promise<vo
             `${deathLine}\n\n` +
                 `**Alive players (${alivePlayers.length}):**\n${alivePlayers.map(p => `• ${p.name}`).join('\n')}\n\n` +
                 `Discuss and figure out who the Mafia is!\n` +
-                `Voting opens in **${DAY_MS / 60000} minutes**.`
+                `🗳️ Voting opens <t:${voteStartsAt}:R>`
         )
-        .setFooter({ text: `${DAY_MS / 60000} minutes of discussion` });
+        .setFooter({ text: `Discussion ends <t:${voteStartsAt}:T>` });
 
     await channel.send({ embeds: [embed] });
 
     // ── AI day messages ──────────────────────────────────────────────────────
     const aiAlive = alivePlayers.filter(p => isAIId(p.id));
+    const webhook = aiAlive.length > 0 ? await getOrCreateWebhook(channel, game.gameNumber) : null;
     for (const aiPlayer of aiAlive) {
         const msgCount = 1 + (Math.random() < 0.5 ? 1 : 0);
         for (let i = 0; i < msgCount; i++) {
@@ -437,7 +481,17 @@ export async function startDayPhase(game: GameState, client: Client): Promise<vo
                 const p = g.players[aiPlayer.id];
                 if (!p || !p.alive) return;
                 const text = await generateDayMessage(g, p);
-                await channel.send(`**${p.name} 🤖:** ${text}`).catch(() => null);
+                if (webhook) {
+                    await webhook
+                        .send({
+                            content: text,
+                            username: `${p.name} 🤖`,
+                            avatarURL: aiAvatarUrl(p.name),
+                        })
+                        .catch(() => channel.send(`**${p.name} 🤖:** ${text}`).catch(() => null));
+                } else {
+                    await channel.send(`**${p.name} 🤖:** ${text}`).catch(() => null);
+                }
                 logEvent(g, `[Day ${g.round}] ${p.name}: "${text.slice(0, 80)}"`);
             }, delay);
         }
@@ -463,16 +517,20 @@ export async function startVotePhase(game: GameState, client: Client): Promise<v
 
     const alivePlayers = Object.values(game.players).filter(p => p.alive);
 
+    const voteEndsAt = Math.floor((Date.now() + VOTE_MS) / 1000);
+
     const embed = new EmbedBuilder()
         .setColor(0xff6600)
         .setTitle('🗳️ Voting Phase')
         .setDescription(
-            `Time to vote! Use \`/vote @player\` to vote to eliminate someone.\n` +
-                `You have **${VOTE_MS / 60000} minutes**.\n\n` +
+            `Time to vote! Use \`/vote @player\` (or \`/vote name:PlayerName\` for AI players).\n` +
+                `Voting closes <t:${voteEndsAt}:R>\n\n` +
                 `**Alive players:**\n${alivePlayers.map(p => `• ${p.name}`).join('\n')}`
         )
         .addFields({ name: 'Current Tally', value: 'No votes yet' })
-        .setFooter({ text: 'Most votes = eliminated. Tie = no elimination.' });
+        .setFooter({
+            text: `Most votes = eliminated. Tie = no elimination. Closes <t:${voteEndsAt}:T>`,
+        });
 
     const tallyMsg = await channel.send({ embeds: [embed] });
     game.tallyMessageId = tallyMsg.id;
@@ -714,6 +772,18 @@ export async function endGame(
         } catch {
             // Ignore
         }
+    }
+
+    // Delete AI webhook if one was created for this game
+    const hook = gameWebhooks.get(game.gameChannelId);
+    if (hook) {
+        try {
+            await hook.delete('Game ended');
+        } catch {
+            // Ignore — channel may already be archived/gone
+        }
+        hook.destroy();
+        gameWebhooks.delete(game.gameChannelId);
     }
 
     deleteGame(game.gameChannelId);

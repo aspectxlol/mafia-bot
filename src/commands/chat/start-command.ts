@@ -29,7 +29,11 @@ import { Command, CommandDeferType } from '../index.js';
 export class StartCommand implements Command {
     public names = [Lang.getRef('chatCommands.start', Language.Default)];
     public deferType = CommandDeferType.PUBLIC;
-    public requireClientPerms: PermissionsString[] = ['ManageChannels', 'ManageRoles'];
+    public requireClientPerms: PermissionsString[] = [
+        'ManageChannels',
+        'ManageRoles',
+        'ManageWebhooks',
+    ];
 
     public async execute(intr: ChatInputCommandInteraction, _data: EventData): Promise<void> {
         if (!intr.guild) {
