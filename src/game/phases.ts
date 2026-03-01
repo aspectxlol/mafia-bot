@@ -485,17 +485,60 @@ export async function startDayPhase(game: GameState, client: Client): Promise<vo
                 if (!g || g.phase !== 'day') return;
                 const p = g.players[aiPlayer.id];
                 if (!p || !p.alive) return;
-                const text = await generateDayMessage(g, p);
+
+                let pendingChannelMessage: { edit: (content: string) => Promise<unknown> } | null =
+                    null;
+                let pendingWebhookMessageId: string | null = null;
+
                 if (webhook) {
-                    await webhook
+                    const pending = await webhook
                         .send({
-                            content: text,
+                            content: '💭 thinking...',
                             username: `${p.name} 🤖`,
                             avatarURL: aiAvatarUrl(p.name),
                         })
-                        .catch(() => channel.send(`**${p.name} 🤖:** ${text}`).catch(() => null));
+                        .catch(() => null);
+                    pendingWebhookMessageId = pending?.id ?? null;
                 } else {
-                    await channel.send(`**${p.name} 🤖:** ${text}`).catch(() => null);
+                    pendingChannelMessage = await channel
+                        .send(`**${p.name} 🤖:** _thinking..._`)
+                        .catch(() => null);
+                }
+
+                const text = await generateDayMessage(g, p);
+
+                if (webhook) {
+                    if (pendingWebhookMessageId) {
+                        await webhook
+                            .editMessage(pendingWebhookMessageId, { content: text })
+                            .catch(() =>
+                                webhook
+                                    .send({
+                                        content: text,
+                                        username: `${p.name} 🤖`,
+                                        avatarURL: aiAvatarUrl(p.name),
+                                    })
+                                    .catch(() => channel.send(text).catch(() => null))
+                            );
+                    } else {
+                        await webhook
+                            .send({
+                                content: text,
+                                username: `${p.name} 🤖`,
+                                avatarURL: aiAvatarUrl(p.name),
+                            })
+                            .catch(() => channel.send(text).catch(() => null));
+                    }
+                } else {
+                    if (pendingChannelMessage) {
+                        await pendingChannelMessage
+                            .edit(`**${p.name} 🤖:** ${text}`)
+                            .catch(() =>
+                                channel.send(`**${p.name} 🤖:** ${text}`).catch(() => null)
+                            );
+                    } else {
+                        await channel.send(`**${p.name} 🤖:** ${text}`).catch(() => null);
+                    }
                 }
                 logEvent(g, `[Day ${g.round}] ${p.name}: "${text.slice(0, 80)}"`);
             })().catch(err => Logger.error('AI day message failed', err));

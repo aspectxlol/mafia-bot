@@ -117,9 +117,50 @@ function aiColor(name: string): string {
     return AI_COLORS[idx % AI_COLORS.length] || '\x1b[36m';
 }
 const RESET = '\x1b[0m';
-function aiDivider(name: string): string {
-    return `${aiColor(name)}\n──────────────────────────────────────────────────────────────${RESET}`;
+const AI_BORDER = '──────────────────────────────────────────────────────────────';
+
+function colorForPlayer(player: PlayerState): string {
+    return aiColor(player.name);
 }
+
+function summarizeContext(context: string, maxLines = 8): string {
+    const lines = context
+        .split('\n')
+        .map(line => line.trim())
+        .filter(Boolean);
+    if (lines.length <= maxLines) return lines.join('\n');
+    const shown = lines.slice(0, maxLines).join('\n');
+    return `${shown}\n… (${lines.length - maxLines} more lines)`;
+}
+
+function logAIStart(game: GameState, player: PlayerState, model: string, action: string): void {
+    const color = colorForPlayer(player);
+    const personality = getPersonality(player);
+    console.log(`\n${color}${AI_BORDER}${RESET}`);
+    console.log(
+        `${color}[AI] ${player.name}${RESET} • role=${player.role} • personality=${personality.name} • model=${model}`
+    );
+    console.log(
+        `${color}[AI] action=${action} • round=${game.round} • phase=${game.phase}${RESET}`
+    );
+}
+
+function logAIContext(player: PlayerState, context: string): void {
+    const color = colorForPlayer(player);
+    console.log(`${color}[AI] context preview:${RESET}`);
+    console.log(`${color}${summarizeContext(context)}${RESET}`);
+}
+
+function logAIChoice(player: PlayerState, label: string, value: string): void {
+    const color = colorForPlayer(player);
+    console.log(`${color}[AI] ${player.name} ${label}: ${value}${RESET}`);
+}
+
+function logAICandidates(player: PlayerState, label: string, names: string[]): void {
+    const color = colorForPlayer(player);
+    console.log(`${color}[AI] ${label}: ${names.join(', ')}${RESET}`);
+}
+
 function pickModel(player: PlayerState): string {
     const hash = player.id.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
     return AI_MODELS[hash % AI_MODELS.length];
@@ -306,19 +347,18 @@ export async function runAINightAction(game: GameState, player: PlayerState): Pr
     const alive = Object.values(game.players).filter(p => p.alive);
     const personality = getPersonality(player);
     const ctx = buildContext(game, player);
-    console.log(`================================`);
-    console.log(`[AI] ${player.name} (${player.role}, ${pickModel(player)}) taking night action`);
-    console.log(`[AI] ${player.name} context: ${ctx}`);
-
     const model = pickModel(player);
+    logAIStart(game, player, model, 'night-action');
+    logAIContext(player, ctx);
 
     if (player.role === 'mafia') {
         if (game.night.actionsReceived.includes('kill')) return;
         const targets = alive.filter(p => p.role !== 'mafia' && p.id !== player.id);
         if (targets.length === 0) return;
-        console.log(aiDivider(player.name));
-        console.log(
-            `${aiColor(player.name)}[AI] ${player.name} (mafia, ${model}) choosing kill target from: ${targets.map(p => p.name).join(', ')}`
+        logAICandidates(
+            player,
+            'kill candidates',
+            targets.map(p => p.name)
         );
         const raw = await ask(
             ctx,
@@ -327,9 +367,7 @@ export async function runAINightAction(game: GameState, player: PlayerState): Pr
         );
         if (game.night.actionsReceived.includes('kill')) return;
         const target = pickFromList(raw, targets);
-        console.log(
-            `${aiColor(player.name)}[AI] ${player.name} chose to eliminate ${target.name}${RESET}`
-        );
+        logAIChoice(player, 'chose kill target', target.name);
         game.night.killTarget = target.id;
         if (!game.night.actionsReceived.includes('kill')) {
             game.night.actionsReceived.push('kill');
@@ -338,9 +376,10 @@ export async function runAINightAction(game: GameState, player: PlayerState): Pr
         if (game.night.actionsReceived.includes('investigate')) return;
         const targets = alive.filter(p => p.id !== player.id);
         if (targets.length === 0) return;
-        console.log(aiDivider(player.name));
-        console.log(
-            `${aiColor(player.name)}[AI] ${player.name} (detective, ${model}) choosing investigate target from: ${targets.map(p => p.name).join(', ')}${RESET}`
+        logAICandidates(
+            player,
+            'investigate candidates',
+            targets.map(p => p.name)
         );
         const raw = await ask(
             ctx,
@@ -350,10 +389,7 @@ export async function runAINightAction(game: GameState, player: PlayerState): Pr
         if (game.night.actionsReceived.includes('investigate')) return;
         const target = pickFromList(raw, targets);
         const isMafia = target.role === 'mafia';
-        console.log(aiDivider(player.name));
-        console.log(
-            `${aiColor(player.name)}[AI] ${player.name} investigated ${target.name} → ${isMafia ? 'MAFIA' : 'innocent'}${RESET}`
-        );
+        logAIChoice(player, 'investigated', `${target.name} → ${isMafia ? 'MAFIA' : 'innocent'}`);
         game.night.investigateTarget = target.id;
         if (!game.night.actionsReceived.includes('investigate')) {
             game.night.actionsReceived.push('investigate');
@@ -369,9 +405,10 @@ export async function runAINightAction(game: GameState, player: PlayerState): Pr
             return true;
         });
         if (targets.length === 0) return;
-        console.log(aiDivider(player.name));
-        console.log(
-            `${aiColor(player.name)}[AI] ${player.name} (doctor, ${model}) choosing protect target from: ${targets.map(p => p.name).join(', ')}${RESET}`
+        logAICandidates(
+            player,
+            'protect candidates',
+            targets.map(p => p.name)
         );
         const raw = await ask(
             ctx,
@@ -380,10 +417,7 @@ export async function runAINightAction(game: GameState, player: PlayerState): Pr
         );
         if (game.night.actionsReceived.includes('protect')) return;
         const target = pickFromList(raw, targets);
-        console.log(aiDivider(player.name));
-        console.log(
-            `${aiColor(player.name)}[AI] ${player.name} chose to protect ${target.name}${RESET}`
-        );
+        logAIChoice(player, 'chose protect target', target.name);
         game.night.protectTarget = target.id;
         if (!game.night.actionsReceived.includes('protect')) {
             game.night.actionsReceived.push('protect');
@@ -402,21 +436,14 @@ export async function generateDayMessage(game: GameState, player: PlayerState): 
     const model = pickModel(player);
     const personality = getPersonality(player);
     const ctx = buildContext(game, player);
-    console.log(`================================`);
-    console.log(
-        `[AI] ${player.name} (${player.role}, ${pickModel(player)}) generating day message`
-    );
-    console.log(aiDivider(player.name));
-    console.log(
-        `${aiColor(player.name)}[AI] ${player.name} (${player.role}, ${model}) generating day message${RESET}`
-    );
-    console.log(`[AI] ${player.name} context: ${ctx}`);
+    logAIStart(game, player, model, 'day-message');
+    logAIContext(player, ctx);
     const text = await ask(
         ctx,
         `It is the day discussion phase. Write ONE short message (1–2 sentences) as a player trying to figure out who the Mafia is. Behavior style: ${personality.style} Ask/accuse style: ${personality.voting} Be natural and conversational. Never break the fourth wall or reveal your role directly.`,
         model
     );
-    console.log(`[AI] ${player.name} says: "${text || '(empty, using fallback)'}"`);
+    logAIChoice(player, 'message', text || '(empty, using fallback)');
     return text || 'Not sure who to trust right now...';
 }
 
@@ -429,9 +456,11 @@ export async function pickVoteTarget(game: GameState, player: PlayerState): Prom
     const model = pickModel(player);
     const personality = getPersonality(player);
     const ctx = buildContext(game, player);
-    console.log(aiDivider(player.name));
-    console.log(
-        `${aiColor(player.name)}[AI] ${player.name} (${player.role}, ${model}) voting from: ${alive.map(p => p.name).join(', ')}${RESET}`
+    logAIStart(game, player, model, 'vote-target');
+    logAICandidates(
+        player,
+        'vote candidates',
+        alive.map(p => p.name)
     );
     const raw = await ask(
         ctx,
@@ -439,6 +468,6 @@ export async function pickVoteTarget(game: GameState, player: PlayerState): Prom
         model
     );
     const target = pickFromList(raw, alive);
-    console.log(`[AI] ${player.name} votes to eliminate ${target.name}`);
+    logAIChoice(player, 'votes to eliminate', target.name);
     return target.id;
 }

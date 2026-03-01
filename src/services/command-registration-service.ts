@@ -21,8 +21,11 @@ export class CommandRegistrationService {
         localCmds: RESTPostAPIApplicationCommandsJSONBody[],
         args: string[]
     ): Promise<void> {
+        const parsed = this.parseArgs(args);
+        const routes = this.getRoutes(parsed.guildId);
+
         let remoteCmds = (await this.rest.get(
-            Routes.applicationCommands(Config.client.id)
+            routes.commands as `/${string}`
         )) as RESTGetAPIApplicationCommandsResult;
 
         let localCmdsOnRemote = localCmds.filter(localCmd =>
@@ -35,7 +38,7 @@ export class CommandRegistrationService {
             remoteCmd => !localCmds.some(localCmd => localCmd.name === remoteCmd.name)
         );
 
-        switch (args[3]) {
+        switch (parsed.action) {
             case 'view': {
                 Logger.info(
                     Logs.info.commandActionView
@@ -57,7 +60,7 @@ export class CommandRegistrationService {
                         )
                     );
                     for (let localCmd of localCmdsOnly) {
-                        await this.rest.post(Routes.applicationCommands(Config.client.id), {
+                        await this.rest.post(routes.commands as `/${string}`, {
                             body: localCmd,
                         });
                     }
@@ -72,7 +75,7 @@ export class CommandRegistrationService {
                         )
                     );
                     for (let localCmd of localCmdsOnRemote) {
-                        await this.rest.post(Routes.applicationCommands(Config.client.id), {
+                        await this.rest.post(routes.commands as `/${string}`, {
                             body: localCmd,
                         });
                     }
@@ -82,8 +85,8 @@ export class CommandRegistrationService {
                 return;
             }
             case 'rename': {
-                let oldName = args[4];
-                let newName = args[5];
+                let oldName = parsed.positionals[0];
+                let newName = parsed.positionals[1];
                 if (!(oldName && newName)) {
                     Logger.error(Logs.error.commandActionRenameMissingArg);
                     return;
@@ -105,14 +108,14 @@ export class CommandRegistrationService {
                 let body: RESTPatchAPIApplicationCommandJSONBody = {
                     name: newName,
                 };
-                await this.rest.patch(Routes.applicationCommand(Config.client.id, remoteCmd.id), {
+                await this.rest.patch(routes.command(remoteCmd.id) as `/${string}`, {
                     body,
                 });
                 Logger.info(Logs.info.commandActionRenamed);
                 return;
             }
             case 'delete': {
-                let name = args[4];
+                let name = parsed.positionals[0];
                 if (!name) {
                     Logger.error(Logs.error.commandActionDeleteMissingArg);
                     return;
@@ -129,7 +132,7 @@ export class CommandRegistrationService {
                 Logger.info(
                     Logs.info.commandActionDeleting.replaceAll('{COMMAND_NAME}', remoteCmd.name)
                 );
-                await this.rest.delete(Routes.applicationCommand(Config.client.id, remoteCmd.id));
+                await this.rest.delete(routes.command(remoteCmd.id) as `/${string}`);
                 Logger.info(Logs.info.commandActionDeleted);
                 return;
             }
@@ -140,11 +143,59 @@ export class CommandRegistrationService {
                         this.formatCommandList(remoteCmds)
                     )
                 );
-                await this.rest.put(Routes.applicationCommands(Config.client.id), { body: [] });
+                await this.rest.put(routes.commands as `/${string}`, { body: [] });
                 Logger.info(Logs.info.commandActionCleared);
                 return;
             }
         }
+    }
+
+    private parseArgs(args: string[]): {
+        action: string;
+        guildId?: string;
+        positionals: string[];
+    } {
+        const relevant = args.slice(3);
+        let guildId: string | undefined;
+        const tokens: string[] = [];
+
+        for (let index = 0; index < relevant.length; index++) {
+            const token = relevant[index];
+            if (token === '--guild' && relevant[index + 1]) {
+                guildId = relevant[index + 1];
+                index++;
+                continue;
+            }
+            if (token.startsWith('--guild=')) {
+                guildId = token.slice('--guild='.length);
+                continue;
+            }
+            tokens.push(token);
+        }
+
+        return {
+            action: tokens[0] ?? '',
+            guildId,
+            positionals: tokens.slice(1),
+        };
+    }
+
+    private getRoutes(guildId?: string): {
+        commands: `/${string}`;
+        command: (commandId: string) => `/${string}`;
+    } {
+        if (guildId) {
+            return {
+                commands: Routes.applicationGuildCommands(Config.client.id, guildId),
+                command: (commandId: string) =>
+                    Routes.applicationGuildCommand(Config.client.id, guildId, commandId),
+            };
+        }
+
+        return {
+            commands: Routes.applicationCommands(Config.client.id),
+            command: (commandId: string) => Routes.applicationCommand(Config.client.id, commandId),
+        };
     }
 
     private formatCommandList(
