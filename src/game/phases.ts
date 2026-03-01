@@ -539,25 +539,35 @@ export async function startDayPhase(game: GameState, client: Client): Promise<vo
         return text;
     }
 
-    // Each AI sends an initial message then keeps chiming in throughout the day.
-    // Between messages: wait 40–90 s. Stop when the phase ends or < 20 s remain.
-    const dayEnd = Date.now() + DAY_MS;
-    for (const aiPlayer of aiAlive) {
-        // Stagger first messages so they don't all appear simultaneously.
-        const initialDelay = Math.floor(Math.random() * 15_000); // 0–15 s
-        void (async () => {
-            await new Promise<void>(res => setTimeout(res, initialDelay));
-            while (true) {
-                if (Date.now() > dayEnd - 20_000) break; // too close to vote phase
-                const text = await sendOneAIMessage(aiPlayer.id);
-                if (text === null) break; // phase changed or player died
-                // Wait 40–90 s before next message, but skip if it would land after the phase ends.
-                const betweenMs = 40_000 + Math.floor(Math.random() * 50_000);
-                if (Date.now() + betweenMs > dayEnd - 20_000) break;
-                await new Promise<void>(res => setTimeout(res, betweenMs));
-            }
-        })().catch(err => Logger.error('AI day message failed', err));
+    // Assign each AI a random number of messages for the round:
+    //   10% silent (0), 20% → 1, 30% → 2, 25% → 3, 15% → 4
+    // All message slots are placed at fully random times across the day window,
+    // creating natural back-and-forth bursts and silences instead of a uniform cadence.
+    // Each slot fires independently via setTimeout so they don't block each other.
+    const dayStart = Date.now();
+    const safeWindowMs = DAY_MS - 30_000; // leave 30 s clear before voting
+
+    function randomMsgCount(): number {
+        const r = Math.random();
+        if (r < 0.1) return 0;
+        if (r < 0.3) return 1;
+        if (r < 0.6) return 2;
+        if (r < 0.85) return 3;
+        return 4;
     }
+
+    for (const aiPlayer of aiAlive) {
+        const count = randomMsgCount();
+        for (let i = 0; i < count; i++) {
+            const delay = Math.floor(Math.random() * safeWindowMs);
+            setTimeout(() => {
+                sendOneAIMessage(aiPlayer.id).catch(err =>
+                    Logger.error('AI day message failed', err)
+                );
+            }, delay);
+        }
+    }
+    void dayStart; // suppress unused-var warning
 
     game.phaseTimer = setTimeout(async () => {
         const g = getGame(game.gameChannelId);
