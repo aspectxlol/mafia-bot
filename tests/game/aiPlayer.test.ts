@@ -644,6 +644,47 @@ describe('generateDayMessage', () => {
         const callArg = mockGroqCreate.mock.calls[0][0] as { messages: { content: string }[] };
         expect(callArg.messages[0].content).toContain('RECENT EVENTS');
     });
+
+    it('includes phase and private notes in context prompt', async () => {
+        const game = makeGame({
+            phase: 'day',
+            gameLog: ['[Night 1] Someone was saved by the doctor.'],
+            playerLogs: {
+                c1: ['[Night 1] You heard conflicting claims.'],
+            },
+        });
+        mockGroqResponse('I need more evidence.');
+
+        await generateDayMessage(game, game.players['c1']);
+
+        const callArg = mockGroqCreate.mock.calls[0][0] as { messages: { content: string }[] };
+        const prompt = callArg.messages[0].content;
+        expect(prompt).toContain('CURRENT PHASE: DAY');
+        expect(prompt).toContain('YOUR PRIVATE NOTES');
+        expect(prompt).toContain('- [Night 1] You heard conflicting claims.');
+        expect(prompt).toContain('PERSONALITY:');
+        expect(prompt).toContain('KNOWLEDGE RULES:');
+    });
+
+    it('does not include hidden role data from raw game state in eliminated list', async () => {
+        const game = makeGame({
+            phase: 'day',
+            players: {
+                m1: makePlayer('m1', { name: 'Alice', role: 'mafia', alive: false }),
+                d1: makePlayer('d1', { name: 'Bob', role: 'detective', alive: true }),
+                c1: makePlayer('c1', { name: 'Dave', role: 'civilian', alive: true }),
+            },
+            gameLog: ['[Day 1] Alice was eliminated by vote (was Mafia)'],
+        });
+
+        mockGroqResponse('I am not sure yet.');
+        await generateDayMessage(game, game.players['c1']);
+
+        const callArg = mockGroqCreate.mock.calls[0][0] as { messages: { content: string }[] };
+        const prompt = callArg.messages[0].content;
+        expect(prompt).toContain('ELIMINATED: Alice');
+        expect(prompt).not.toContain('ELIMINATED: Alice (was mafia)');
+    });
 });
 
 // ─── pickVoteTarget ───────────────────────────────────────────────────────────
@@ -770,5 +811,20 @@ describe('night sequence integration', () => {
         expect(game.playerLogs['doc1']?.length).toBeGreaterThan(0);
         // Mafia has no private log (their kill becomes public when night resolves)
         expect(game.playerLogs['m1']).toBeUndefined();
+    });
+
+    it('does not overwrite an already-submitted mafia kill after AI response returns', async () => {
+        const game = makeGame();
+        game.night.killTarget = 'c2';
+
+        mockGroqCreate.mockImplementationOnce(async () => {
+            game.night.actionsReceived.push('kill');
+            return { choices: [{ message: { content: 'Dave' } }] };
+        });
+
+        await runAINightAction(game, game.players['m1']);
+
+        expect(game.night.killTarget).toBe('c2');
+        expect(game.night.actionsReceived.filter(action => action === 'kill')).toHaveLength(1);
     });
 });

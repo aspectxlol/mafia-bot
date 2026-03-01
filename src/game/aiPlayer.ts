@@ -52,6 +52,52 @@ const AI_MODELS = [
     'llama-3.3-70b-versatile',
 ] as const;
 
+type AIPersonality = {
+    name: string;
+    style: string;
+    voting: string;
+    strategy: string;
+};
+
+const AI_PERSONALITIES: readonly AIPersonality[] = [
+    {
+        name: 'Shy',
+        style: 'Quiet, cautious, and concise. Avoids strong accusations unless evidence is clear.',
+        voting: 'Prefers safer, consensus-aligned votes unless strongly convinced.',
+        strategy: 'Plays low-risk and avoids attracting attention.',
+    },
+    {
+        name: 'Interrogative',
+        style: 'Asks probing questions and challenges contradictions directly.',
+        voting: 'Votes based on suspicious inconsistencies and weak explanations.',
+        strategy: 'Pressures others to reveal information through questioning.',
+    },
+    {
+        name: 'Bad Liar',
+        style: 'Can bluff, but bluffs are awkward and sometimes over-explained.',
+        voting: 'May make slightly inconsistent choices under pressure.',
+        strategy: 'Attempts deception but struggles to maintain perfect consistency.',
+    },
+    {
+        name: 'Analytical',
+        style: 'Structured and logical; references patterns and process of elimination.',
+        voting: 'Prioritizes probability and prior behavior over emotion.',
+        strategy: 'Builds incremental cases from known public facts.',
+    },
+    {
+        name: 'Impulsive',
+        style: 'Quick to react, emotional tone, sometimes jumps to conclusions.',
+        voting: 'Can pivot votes rapidly when new claims appear.',
+        strategy: 'High-variance choices that can create chaos.',
+    },
+    {
+        name: 'Diplomatic',
+        style: 'Calm and cooperative; de-escalates conflict and avoids hard pushes.',
+        voting: 'Looks for compromise targets to keep town aligned.',
+        strategy: 'Focuses on group cohesion and gradual trust building.',
+    },
+];
+
 // ─── AI color helpers ──────────────────────────────────────────────────────
 const AI_COLORS = [
     '\x1b[36m', // cyan
@@ -79,6 +125,14 @@ function pickModel(player: PlayerState): string {
     return AI_MODELS[hash % AI_MODELS.length];
 }
 
+function stableHash(input: string): number {
+    return input.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
+}
+
+function getPersonality(player: PlayerState): AIPersonality {
+    return AI_PERSONALITIES[stableHash(player.id) % AI_PERSONALITIES.length];
+}
+
 // ─── Groq client ─────────────────────────────────────────────────────────────
 
 let groqClient: Groq | null = null;
@@ -97,6 +151,7 @@ function getGroq(): Groq {
 function buildContext(game: GameState, player: PlayerState): string {
     const alive = Object.values(game.players).filter(p => p.alive);
     const dead = Object.values(game.players).filter(p => !p.alive);
+    const personality = getPersonality(player);
     const mafiaTeamNames =
         player.role === 'mafia'
             ? Object.values(game.players)
@@ -104,23 +159,34 @@ function buildContext(game: GameState, player: PlayerState): string {
                   .map(p => p.name)
             : [];
 
+    const clip = (value: string, max = 200): string => {
+        const normalized = value.replace(/\s+/g, ' ').trim();
+        if (normalized.length <= max) return normalized;
+        return `${normalized.slice(0, Math.max(0, max - 1))}…`;
+    };
+
+    const recentEvents = game.gameLog.length > 0 ? game.gameLog.slice(-10) : ['Game just started.'];
+    const privateNotes = game.playerLogs[player.id]?.slice(-6) ?? [];
+
     const lines = [
         `You are ${player.name}, playing Mafia (a social deduction game). Game round: ${game.round}.`,
+        `CURRENT PHASE: ${game.phase.toUpperCase()}`,
+        `STATUS: ${player.alive ? 'ALIVE' : 'ELIMINATED'}`,
         `YOUR ROLE: ${player.role.toUpperCase()}`,
+        `PERSONALITY: ${personality.name} — ${personality.style}`,
         player.role === 'mafia'
             ? `Your mafia teammates: ${mafiaTeamNames.join(', ') || 'none (you are solo Mafia)'}`
             : '',
         `WIN CONDITION: ${player.role === 'mafia' ? 'Mafia equals or outnumbers Town' : 'Eliminate all Mafia members'}`,
+        'KNOWLEDGE RULES: Only use your own role, your private notes, and public events. Do not assume hidden roles of living players.',
         '',
-        `ALIVE (${alive.length}): ${alive.map(p => p.name).join(', ')}`,
-        dead.length > 0
-            ? `ELIMINATED: ${dead.map(p => `${p.name} (was ${p.role})`).join(', ')}`
-            : '',
+        `ALIVE (${alive.length}): ${alive.map(p => clip(p.name, 32)).join(', ')}`,
+        dead.length > 0 ? `ELIMINATED: ${dead.map(p => clip(p.name, 32)).join(', ')}` : '',
         '',
         'RECENT EVENTS:',
-        game.gameLog.join('\n') || 'Game just started.',
-        ...(game.playerLogs[player.id]?.length
-            ? ['', 'YOUR PRIVATE NOTES:', ...game.playerLogs[player.id].slice(-6)]
+        ...recentEvents.map(event => `- ${clip(event)}`),
+        ...(privateNotes.length
+            ? ['', 'YOUR PRIVATE NOTES:', ...privateNotes.map(note => `- ${clip(note)}`)]
             : []),
     ];
     return lines.filter(l => l !== '').join('\n');
@@ -128,6 +194,43 @@ function buildContext(game: GameState, player: PlayerState): string {
 
 const MIN_RETRY_MS = 5_000; // never retry faster than 5 s
 const MAX_RETRIES = 3;
+const MAX_PARALLEL_AI_REQUESTS = 4;
+
+type RequestTask<T> = {
+    run: () => Promise<T>;
+    resolve: (value: T) => void;
+    reject: (reason?: unknown) => void;
+};
+
+const requestQueue: RequestTask<unknown>[] = [];
+let activeRequestCount = 0;
+
+function pumpRequestQueue(): void {
+    while (activeRequestCount < MAX_PARALLEL_AI_REQUESTS && requestQueue.length > 0) {
+        const task = requestQueue.shift();
+        if (!task) return;
+        activeRequestCount++;
+        Promise.resolve()
+            .then(task.run)
+            .then(task.resolve)
+            .catch(task.reject)
+            .finally(() => {
+                activeRequestCount = Math.max(0, activeRequestCount - 1);
+                pumpRequestQueue();
+            });
+    }
+}
+
+function enqueueRequest<T>(run: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+        requestQueue.push({
+            run,
+            resolve,
+            reject,
+        });
+        pumpRequestQueue();
+    });
+}
 
 /** Parse retry-after delay in ms from a Groq 429 error. */
 function parseRetryDelay(err: unknown): number {
@@ -153,12 +256,14 @@ async function ask(context: string, task: string, model: string): Promise<string
     const prompt = `${context}\n\nTASK: ${task}\n\nRespond with ONLY what is asked. No extra explanation.`;
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
         try {
-            const completion = await getGroq().chat.completions.create({
-                model,
-                messages: [{ role: 'user', content: prompt }],
-                max_tokens: 512,
-                temperature: 0.8,
-            });
+            const completion = await enqueueRequest(() =>
+                getGroq().chat.completions.create({
+                    model,
+                    messages: [{ role: 'user', content: prompt }],
+                    max_tokens: 512,
+                    temperature: 0.8,
+                })
+            );
             const raw = (completion.choices[0]?.message?.content ?? '')
                 .replace(/grounded[\s\S]*?<\/think>/gi, '') // strip complete think blocks
                 .replace(/grounded[\s\S]*/i, '') // strip truncated (unclosed) think block
@@ -199,6 +304,7 @@ function pickFromList<T extends { name: string }>(raw: string, candidates: T[]):
  */
 export async function runAINightAction(game: GameState, player: PlayerState): Promise<void> {
     const alive = Object.values(game.players).filter(p => p.alive);
+    const personality = getPersonality(player);
     const ctx = buildContext(game, player);
     console.log(`================================`);
     console.log(`[AI] ${player.name} (${player.role}, ${pickModel(player)}) taking night action`);
@@ -216,15 +322,18 @@ export async function runAINightAction(game: GameState, player: PlayerState): Pr
         );
         const raw = await ask(
             ctx,
-            `It is night. Choose one Town player to eliminate. Options: ${targets.map(p => p.name).join(', ')}. Reply with only the player's exact name.`,
+            `It is night. Choose one Town player to eliminate. Options: ${targets.map(p => p.name).join(', ')}. Personality guidance: ${personality.strategy}. Reply with only the player's exact name.`,
             model
         );
+        if (game.night.actionsReceived.includes('kill')) return;
         const target = pickFromList(raw, targets);
         console.log(
             `${aiColor(player.name)}[AI] ${player.name} chose to eliminate ${target.name}${RESET}`
         );
         game.night.killTarget = target.id;
-        game.night.actionsReceived.push('kill');
+        if (!game.night.actionsReceived.includes('kill')) {
+            game.night.actionsReceived.push('kill');
+        }
     } else if (player.role === 'detective') {
         if (game.night.actionsReceived.includes('investigate')) return;
         const targets = alive.filter(p => p.id !== player.id);
@@ -235,9 +344,10 @@ export async function runAINightAction(game: GameState, player: PlayerState): Pr
         );
         const raw = await ask(
             ctx,
-            `It is night. Choose one player to investigate. Options: ${targets.map(p => p.name).join(', ')}. Reply with only the player's exact name.`,
+            `It is night. Choose one player to investigate. Options: ${targets.map(p => p.name).join(', ')}. Personality guidance: ${personality.strategy}. Reply with only the player's exact name.`,
             model
         );
+        if (game.night.actionsReceived.includes('investigate')) return;
         const target = pickFromList(raw, targets);
         const isMafia = target.role === 'mafia';
         console.log(aiDivider(player.name));
@@ -245,7 +355,9 @@ export async function runAINightAction(game: GameState, player: PlayerState): Pr
             `${aiColor(player.name)}[AI] ${player.name} investigated ${target.name} → ${isMafia ? 'MAFIA' : 'innocent'}${RESET}`
         );
         game.night.investigateTarget = target.id;
-        game.night.actionsReceived.push('investigate');
+        if (!game.night.actionsReceived.includes('investigate')) {
+            game.night.actionsReceived.push('investigate');
+        }
         (game.playerLogs[player.id] ??= []).push(
             `[Night ${game.round}] You investigated ${target.name}: ${isMafia ? 'MAFIA' : 'not Mafia'}`
         );
@@ -263,16 +375,19 @@ export async function runAINightAction(game: GameState, player: PlayerState): Pr
         );
         const raw = await ask(
             ctx,
-            `It is night. Choose one player to protect from a Mafia kill. Options: ${targets.map(p => p.name).join(', ')}. Reply with only the player's exact name.`,
+            `It is night. Choose one player to protect from a Mafia kill. Options: ${targets.map(p => p.name).join(', ')}. Personality guidance: ${personality.strategy}. Reply with only the player's exact name.`,
             model
         );
+        if (game.night.actionsReceived.includes('protect')) return;
         const target = pickFromList(raw, targets);
         console.log(aiDivider(player.name));
         console.log(
             `${aiColor(player.name)}[AI] ${player.name} chose to protect ${target.name}${RESET}`
         );
         game.night.protectTarget = target.id;
-        game.night.actionsReceived.push('protect');
+        if (!game.night.actionsReceived.includes('protect')) {
+            game.night.actionsReceived.push('protect');
+        }
         if (target.id === player.id) player.selfProtectUsed = true;
         (game.playerLogs[player.id] ??= []).push(
             `[Night ${game.round}] You chose to protect ${target.name}`
@@ -285,6 +400,7 @@ export async function runAINightAction(game: GameState, player: PlayerState): Pr
 /** Returns a short discussion message the AI player would say during the day. */
 export async function generateDayMessage(game: GameState, player: PlayerState): Promise<string> {
     const model = pickModel(player);
+    const personality = getPersonality(player);
     const ctx = buildContext(game, player);
     console.log(`================================`);
     console.log(
@@ -297,7 +413,7 @@ export async function generateDayMessage(game: GameState, player: PlayerState): 
     console.log(`[AI] ${player.name} context: ${ctx}`);
     const text = await ask(
         ctx,
-        `It is the day discussion phase. Write ONE short message (1–2 sentences) as a player trying to figure out who the Mafia is. Be natural and conversational. Never break the fourth wall or reveal your role directly.`,
+        `It is the day discussion phase. Write ONE short message (1–2 sentences) as a player trying to figure out who the Mafia is. Behavior style: ${personality.style} Ask/accuse style: ${personality.voting} Be natural and conversational. Never break the fourth wall or reveal your role directly.`,
         model
     );
     console.log(`[AI] ${player.name} says: "${text || '(empty, using fallback)'}"`);
@@ -311,6 +427,7 @@ export async function pickVoteTarget(game: GameState, player: PlayerState): Prom
     const alive = Object.values(game.players).filter(p => p.alive && p.id !== player.id);
     if (alive.length === 0) return null;
     const model = pickModel(player);
+    const personality = getPersonality(player);
     const ctx = buildContext(game, player);
     console.log(aiDivider(player.name));
     console.log(
@@ -318,7 +435,7 @@ export async function pickVoteTarget(game: GameState, player: PlayerState): Prom
     );
     const raw = await ask(
         ctx,
-        `It is the voting phase. Vote to eliminate one player. Options: ${alive.map(p => p.name).join(', ')}. Reply with only the player's exact name.`,
+        `It is the voting phase. Vote to eliminate one player. Options: ${alive.map(p => p.name).join(', ')}. Personality guidance: ${personality.voting}. Use only known public information plus your private notes. Reply with only the player's exact name.`,
         model
     );
     const target = pickFromList(raw, alive);

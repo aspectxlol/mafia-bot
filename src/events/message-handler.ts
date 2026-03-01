@@ -17,7 +17,11 @@ export class MessageHandler implements EventHandler {
         const game = msg.channelId ? getGame(msg.channelId) : undefined;
         if (game && game.phase === 'day' && !msg.author.bot) {
             const player = game.players[msg.author.id];
-            const name = player?.name ?? msg.author.displayName;
+            if (!player || !player.alive) {
+                await this.triggerHandler.process(msg);
+                return;
+            }
+            const name = player.name;
             let text = msg.content?.trim() ?? '';
             if (!text && msg.embeds?.length > 0 && msg.embeds[0].description) {
                 text = msg.embeds[0].description.slice(0, 100);
@@ -28,7 +32,9 @@ export class MessageHandler implements EventHandler {
             if (!text && msg.stickers?.size > 0) {
                 text = '[Sticker]';
             }
-            logEvent(game, `[Day ${game.round}] ${name}: "${text}"`);
+            if (text) {
+                logEvent(game, `[Day ${game.round}] ${name}: "${text.slice(0, 160)}"`);
+            }
         }
 
         // Process trigger

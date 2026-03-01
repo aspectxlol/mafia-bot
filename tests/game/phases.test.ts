@@ -331,6 +331,41 @@ describe('resolveNight', () => {
 
         expect(game.phase).toBe('day');
     });
+
+    it('is a no-op when called outside night phase', async () => {
+        const game = makeGame({
+            phase: 'day',
+            players: {
+                m1: makePlayer('m1', 'mafia'),
+                c1: makePlayer('c1', 'civilian'),
+            },
+            night: { ...createNightState(), killTarget: 'c1', actionsReceived: ['kill'] },
+        });
+        setGame(GAME_CH, game);
+
+        await resolveNight(game, client as any);
+
+        expect(game.players['c1'].alive).toBe(true);
+        expect(game.lastNightDeath).toBeNull();
+    });
+
+    it('prevents duplicate concurrent night resolution', async () => {
+        const game = makeGame({
+            phase: 'night',
+            players: {
+                m1: makePlayer('m1', 'mafia'),
+                c1: makePlayer('c1', 'civilian'),
+                c2: makePlayer('c2', 'civilian'),
+            },
+            night: { ...createNightState(), killTarget: 'c1', actionsReceived: ['kill'] },
+        });
+        setGame(GAME_CH, game);
+
+        await Promise.all([resolveNight(game, client as any), resolveNight(game, client as any)]);
+
+        expect(game.phase).toBe('ended');
+        expect(channel.send).toHaveBeenCalledTimes(1);
+    });
 });
 
 // ── resolveVote ───────────────────────────────────────────────────────────────
@@ -530,6 +565,50 @@ describe('resolveVote', () => {
                 ]),
             })
         );
+    });
+
+    it('is a no-op when called outside vote phase', async () => {
+        const game = makeGame({
+            phase: 'day',
+            players: {
+                m1: makePlayer('m1', 'mafia'),
+                c1: makePlayer('c1', 'civilian'),
+                c2: makePlayer('c2', 'civilian'),
+            },
+            vote: {
+                votes: { c1: 'm1', c2: 'm1' },
+                tally: { m1: 2 },
+            },
+        });
+        setGame(GAME_CH, game);
+
+        await resolveVote(game, client as any);
+
+        expect(game.players['m1'].alive).toBe(true);
+        expect(game.round).toBe(1);
+    });
+
+    it('prevents duplicate concurrent vote resolution', async () => {
+        const game = makeGame({
+            phase: 'vote',
+            round: 1,
+            players: {
+                m1: makePlayer('m1', 'mafia'),
+                c1: makePlayer('c1', 'civilian'),
+                c2: makePlayer('c2', 'civilian'),
+                c3: makePlayer('c3', 'civilian'),
+            },
+            vote: {
+                votes: { c1: 'c3', c2: 'c3' },
+                tally: { c3: 2 },
+            },
+        });
+        setGame(GAME_CH, game);
+
+        await Promise.all([resolveVote(game, client as any), resolveVote(game, client as any)]);
+
+        expect(game.round).toBe(2);
+        expect(channel.send).toHaveBeenCalledTimes(2);
     });
 });
 

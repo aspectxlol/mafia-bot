@@ -37,6 +37,8 @@ const VOTE_WARN_MS = 60 * 1000;
 
 // ─── Webhook cache (one per game channel) ───────────────────────────────────
 const gameWebhooks = new Map<string, WebhookClient>();
+const resolvingNightGames = new Set<string>();
+const resolvingVoteGames = new Set<string>();
 
 /** Returns an avatar URL for an AI player using DiceBear bottts style. */
 function aiAvatarUrl(name: string): string {
@@ -297,17 +299,14 @@ export async function startNightPhase(game: GameState, client: Client): Promise<
 
     // ── AI night actions ────────────────────────────────────────────────────
     const aiNightPlayers = alivePlayers.filter(p => isAIId(p.id) && p.role !== 'civilian');
-    for (let idx = 0; idx < aiNightPlayers.length; idx++) {
-        const aiPlayer = aiNightPlayers[idx];
-        // Stagger: 10s for first, each subsequent adds 10s
-        const delay = 1_000 + idx * 10_000 + Math.random() * 2_000;
-        setTimeout(async () => {
+    for (const aiPlayer of aiNightPlayers) {
+        void (async () => {
             const g = getGame(game.gameChannelId);
             if (!g || g.phase !== 'night') return;
             const p = g.players[aiPlayer.id];
             if (!p || !p.alive) return;
             await runAINightAction(g, p);
-        }, delay);
+        })().catch(err => Logger.error('AI night action failed', err));
     }
 
     // ── 1-minute reminder ───────────────────────────────────────────────────
@@ -349,74 +348,84 @@ export async function startNightPhase(game: GameState, client: Client): Promise<
 
 // ─── Night Resolution ────────────────────────────────────────────────────────
 export async function resolveNight(game: GameState, client: Client): Promise<void> {
-    clearTimers(game);
+    if (game.phase !== 'night') return;
+    if (resolvingNightGames.has(game.gameChannelId)) return;
+    resolvingNightGames.add(game.gameChannelId);
 
-    const { killTarget, protectTarget, investigateTarget } = game.night;
+    try {
+        clearTimers(game);
 
-    // ── Doctor saves? ────────────────────────────────────────────────────────
-    let saved = false;
-    let killed: PlayerState | null = null;
+        const { killTarget, protectTarget, investigateTarget } = game.night;
 
-    if (killTarget) {
-        if (killTarget === protectTarget) {
-            saved = true;
-        } else {
-            killed = game.players[killTarget] ?? null;
-            if (killed) killed.alive = false;
-        }
-    }
+        // ── Doctor saves? ────────────────────────────────────────────────────────
+        let saved = false;
+        let killed: PlayerState | null = null;
 
-    // ── Update doctor's last-night-protect flag ──────────────────────────────
-    for (const player of Object.values(game.players)) {
-        if (player.role === 'doctor') {
-            player.protectedLastNight = protectTarget !== null;
-            player.lastProtectedId = protectTarget;
-        }
-    }
-
-    // ── Detective result DM ──────────────────────────────────────────────────
-    if (investigateTarget) {
-        const detective = Object.values(game.players).find(p => p.role === 'detective' && p.alive);
-        if (detective) {
-            const target = game.players[investigateTarget];
-            const isMafia = target?.role === 'mafia';
-            (game.playerLogs[detective.id] ??= []).push(
-                `[Night ${game.round}] You investigated ${target?.name ?? '?'}: ${isMafia ? 'MAFIA' : 'not Mafia'}`
-            );
-            if (!detective.isAI) {
-                await sendDM(
-                    client,
-                    detective.id,
-                    new EmbedBuilder()
-                        .setColor(isMafia ? 0x8b0000 : 0x00c851)
-                        .setTitle(`🔍 Investigation Result — Night ${game.round}`)
-                        .addFields({
-                            name: target?.name ?? 'Unknown',
-                            value: isMafia ? '🔫 **Mafia!**' : '✅ **Not Mafia**',
-                        })
-                );
+        if (killTarget) {
+            if (killTarget === protectTarget) {
+                saved = true;
+            } else {
+                killed = game.players[killTarget] ?? null;
+                if (killed) killed.alive = false;
             }
         }
+
+        // ── Update doctor's last-night-protect flag ──────────────────────────────
+        for (const player of Object.values(game.players)) {
+            if (player.role === 'doctor') {
+                player.protectedLastNight = protectTarget !== null;
+                player.lastProtectedId = protectTarget;
+            }
+        }
+
+        // ── Detective result DM ──────────────────────────────────────────────────
+        if (investigateTarget) {
+            const detective = Object.values(game.players).find(
+                p => p.role === 'detective' && p.alive
+            );
+            if (detective) {
+                const target = game.players[investigateTarget];
+                const isMafia = target?.role === 'mafia';
+                (game.playerLogs[detective.id] ??= []).push(
+                    `[Night ${game.round}] You investigated ${target?.name ?? '?'}: ${isMafia ? 'MAFIA' : 'not Mafia'}`
+                );
+                if (!detective.isAI) {
+                    await sendDM(
+                        client,
+                        detective.id,
+                        new EmbedBuilder()
+                            .setColor(isMafia ? 0x8b0000 : 0x00c851)
+                            .setTitle(`🔍 Investigation Result — Night ${game.round}`)
+                            .addFields({
+                                name: target?.name ?? 'Unknown',
+                                value: isMafia ? '🔫 **Mafia!**' : '✅ **Not Mafia**',
+                            })
+                    );
+                }
+            }
+        }
+
+        game.lastNightDeath = killed?.id ?? null;
+        game.lastNightSaved = saved;
+
+        if (saved) {
+            logEvent(game, `[Night ${game.round}] Doctor saved someone from a Mafia kill`);
+        } else if (killed) {
+            logEvent(game, `[Night ${game.round}] ${killed.name} was killed by Mafia`);
+        } else {
+            logEvent(game, `[Night ${game.round}] No kill (no target chosen)`);
+        }
+
+        const win = checkWin(game);
+        if (win) {
+            await endGame(game, client, win);
+            return;
+        }
+
+        await startDayPhase(game, client);
+    } finally {
+        resolvingNightGames.delete(game.gameChannelId);
     }
-
-    game.lastNightDeath = killed?.id ?? null;
-    game.lastNightSaved = saved;
-
-    if (saved) {
-        logEvent(game, `[Night ${game.round}] Doctor saved someone from a Mafia kill`);
-    } else if (killed) {
-        logEvent(game, `[Night ${game.round}] ${killed.name} was killed by Mafia`);
-    } else {
-        logEvent(game, `[Night ${game.round}] No kill (no target chosen)`);
-    }
-
-    const win = checkWin(game);
-    if (win) {
-        await endGame(game, client, win);
-        return;
-    }
-
-    await startDayPhase(game, client);
 }
 
 // ─── Day Phase ───────────────────────────────────────────────────────────────
@@ -468,15 +477,10 @@ export async function startDayPhase(game: GameState, client: Client): Promise<vo
     // ── AI day messages ──────────────────────────────────────────────────────
     const aiAlive = alivePlayers.filter(p => isAIId(p.id));
     const webhook = aiAlive.length > 0 ? await getOrCreateWebhook(channel, game.gameNumber) : null;
-    // Global message slot so no two AI API calls fire at the same time
-    let globalMsgSlot = 0;
     for (const aiPlayer of aiAlive) {
         const msgCount = 1 + (Math.random() < 0.5 ? 1 : 0);
         for (let i = 0; i < msgCount; i++) {
-            // Each slot is ~15s apart; first message starts at 8–15s
-            const delay = 3_000 + globalMsgSlot * 15_000 + Math.random() * 3_000;
-            globalMsgSlot++;
-            setTimeout(async () => {
+            void (async () => {
                 const g = getGame(game.gameChannelId);
                 if (!g || g.phase !== 'day') return;
                 const p = g.players[aiPlayer.id];
@@ -494,7 +498,7 @@ export async function startDayPhase(game: GameState, client: Client): Promise<vo
                     await channel.send(`**${p.name} 🤖:** ${text}`).catch(() => null);
                 }
                 logEvent(g, `[Day ${g.round}] ${p.name}: "${text.slice(0, 80)}"`);
-            }, delay);
+            })().catch(err => Logger.error('AI day message failed', err));
         }
     }
 
@@ -538,11 +542,8 @@ export async function startVotePhase(game: GameState, client: Client): Promise<v
 
     // ── AI votes ─────────────────────────────────────────────────────────────
     const aiAliveVote = alivePlayers.filter(p => isAIId(p.id));
-    for (let idx = 0; idx < aiAliveVote.length; idx++) {
-        const aiPlayer = aiAliveVote[idx];
-        // Stagger: 10s for first, each subsequent adds 10s
-        const delay = 1_000 + idx * 10_000 + Math.random() * 2_000;
-        setTimeout(async () => {
+    for (const aiPlayer of aiAliveVote) {
+        void (async () => {
             const g = getGame(game.gameChannelId);
             if (!g || g.phase !== 'vote') return;
             const p = g.players[aiPlayer.id];
@@ -555,7 +556,7 @@ export async function startVotePhase(game: GameState, client: Client): Promise<v
             if (allAlive.every(pp => g.vote.votes[pp.id] !== undefined)) {
                 await resolveVote(g, client);
             }
-        }, delay);
+        })().catch(err => Logger.error('AI vote failed', err));
     }
 
     // ── 1-minute warning ─────────────────────────────────────────────────────
@@ -628,77 +629,85 @@ export async function updateVoteTally(game: GameState, client: Client): Promise<
 
 // ─── Vote Resolution ─────────────────────────────────────────────────────────
 export async function resolveVote(game: GameState, client: Client): Promise<void> {
-    clearTimers(game);
+    if (game.phase !== 'vote') return;
+    if (resolvingVoteGames.has(game.gameChannelId)) return;
+    resolvingVoteGames.add(game.gameChannelId);
 
-    const channel = (await client.channels
-        .fetch(game.gameChannelId)
-        .catch(() => null)) as TextChannel | null;
-    if (!channel) return;
+    try {
+        clearTimers(game);
 
-    const tally = game.vote.tally;
-    const entries = Object.entries(tally).sort(([, a], [, b]) => b - a);
+        const channel = (await client.channels
+            .fetch(game.gameChannelId)
+            .catch(() => null)) as TextChannel | null;
+        if (!channel) return;
 
-    if (entries.length === 0) {
-        await channel.send({
-            embeds: [
-                new EmbedBuilder()
-                    .setColor(0x888888)
-                    .setTitle('🤷 No Votes Cast')
-                    .setDescription("The town couldn't decide. Nobody is eliminated."),
-            ],
-        });
-    } else {
-        const [topId, topVotes] = entries[0];
-        const tied = entries.filter(([, v]) => v === topVotes);
+        const tally = game.vote.tally;
+        const entries = Object.entries(tally).sort(([, a], [, b]) => b - a);
 
-        if (tied.length > 1) {
-            const tieNames = tied.map(([id]) => game.players[id]?.name ?? id).join(', ');
+        if (entries.length === 0) {
             await channel.send({
                 embeds: [
                     new EmbedBuilder()
                         .setColor(0x888888)
-                        .setTitle("⚖️ It's a Tie!")
-                        .setDescription("The town couldn't decide. Nobody is eliminated.")
-                        .addFields({
-                            name: 'Tied Players',
-                            value: `${tieNames} — each with **${topVotes}** vote(s)`,
-                        }),
+                        .setTitle('🤷 No Votes Cast')
+                        .setDescription("The town couldn't decide. Nobody is eliminated."),
                 ],
             });
         } else {
-            const eliminated = game.players[topId];
-            if (eliminated) {
-                eliminated.alive = false;
-                logEvent(
-                    game,
-                    `[Day ${game.round}] ${eliminated.name} was eliminated by vote (was ${getRoleDisplayName(eliminated.role)})`
-                );
+            const [topId, topVotes] = entries[0];
+            const tied = entries.filter(([, v]) => v === topVotes);
+
+            if (tied.length > 1) {
+                const tieNames = tied.map(([id]) => game.players[id]?.name ?? id).join(', ');
                 await channel.send({
                     embeds: [
                         new EmbedBuilder()
-                            .setColor(0x8b0000)
-                            .setTitle('🪓 Player Eliminated')
-                            .setDescription(
-                                `**${eliminated.name}** has been eliminated with **${topVotes}** vote(s)!`
-                            )
+                            .setColor(0x888888)
+                            .setTitle("⚖️ It's a Tie!")
+                            .setDescription("The town couldn't decide. Nobody is eliminated.")
                             .addFields({
-                                name: 'Their Role',
-                                value: `${getRoleDisplayName(eliminated.role)} ${getRoleEmoji(eliminated.role)}`,
+                                name: 'Tied Players',
+                                value: `${tieNames} — each with **${topVotes}** vote(s)`,
                             }),
                     ],
                 });
+            } else {
+                const eliminated = game.players[topId];
+                if (eliminated) {
+                    eliminated.alive = false;
+                    logEvent(
+                        game,
+                        `[Day ${game.round}] ${eliminated.name} was eliminated by vote (was ${getRoleDisplayName(eliminated.role)})`
+                    );
+                    await channel.send({
+                        embeds: [
+                            new EmbedBuilder()
+                                .setColor(0x8b0000)
+                                .setTitle('🪓 Player Eliminated')
+                                .setDescription(
+                                    `**${eliminated.name}** has been eliminated with **${topVotes}** vote(s)!`
+                                )
+                                .addFields({
+                                    name: 'Their Role',
+                                    value: `${getRoleDisplayName(eliminated.role)} ${getRoleEmoji(eliminated.role)}`,
+                                }),
+                        ],
+                    });
+                }
             }
         }
-    }
 
-    const win = checkWin(game);
-    if (win) {
-        await endGame(game, client, win);
-        return;
-    }
+        const win = checkWin(game);
+        if (win) {
+            await endGame(game, client, win);
+            return;
+        }
 
-    game.round++;
-    await startNightPhase(game, client);
+        game.round++;
+        await startNightPhase(game, client);
+    } finally {
+        resolvingVoteGames.delete(game.gameChannelId);
+    }
 }
 
 // ─── End Game ────────────────────────────────────────────────────────────────
