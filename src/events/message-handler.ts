@@ -3,6 +3,7 @@ import { Message } from 'discord.js';
 import { EventHandler, TriggerHandler } from './index.js';
 import { getGame } from '../game/gameState.js';
 import { logEvent } from '../game/aiPlayer.js';
+import { handleDayPlayerMessage } from '../game/phases.js';
 
 export class MessageHandler implements EventHandler {
     constructor(private triggerHandler: TriggerHandler) {}
@@ -33,8 +34,10 @@ export class MessageHandler implements EventHandler {
                 text = '[Sticker]';
             }
             if (text) {
-                logEvent(game, `[Day ${game.round}] ${name}: "${text.slice(0, 160)}"`);
+                logEvent(game, `[Day ${game.round}] ${name}: "${text}"`);
             }
+            // Fire immediate AI replies to any questions directed at AI players
+            void handleDayPlayerMessage(msg);
         }
 
         // Process trigger

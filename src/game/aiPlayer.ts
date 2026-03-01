@@ -41,7 +41,7 @@ export function isAIId(id: string): boolean {
 
 export function logEvent(game: GameState, event: string): void {
     game.gameLog.push(event);
-    if (game.gameLog.length > 30) game.gameLog.splice(0, game.gameLog.length - 30);
+    if (game.gameLog.length > 60) game.gameLog.splice(0, game.gameLog.length - 60);
 }
 
 // ─── Model rotation ──────────────────────────────────────────────────────────
@@ -196,8 +196,8 @@ function buildContext(game: GameState, player: PlayerState): string {
         return `${normalized.slice(0, Math.max(0, max - 1))}…`;
     };
 
-    const recentEvents = game.gameLog.length > 0 ? game.gameLog.slice(-10) : ['Game just started.'];
-    const privateNotes = game.playerLogs[player.id]?.slice(-6) ?? [];
+    const recentEvents = game.gameLog.length > 0 ? game.gameLog : ['Game just started.'];
+    const privateNotes = game.playerLogs[player.id]?.slice(-10) ?? [];
 
     const lines = [
         `You are ${player.name}, playing Mafia (a social deduction game). Game round: ${game.round}.`,
@@ -210,14 +210,17 @@ function buildContext(game: GameState, player: PlayerState): string {
             : '',
         `WIN CONDITION: ${player.role === 'mafia' ? 'Mafia equals or outnumbers Town' : 'Eliminate all Mafia members'}`,
         'KNOWLEDGE RULES: Only use your own role, your private notes, and public events. Do not assume hidden roles of living players.',
+        game.phase === 'day'
+            ? 'SOCIAL MECHANIC: If you address a player by name with a question (e.g. "Casey, why did you...?"), they will respond immediately. Use this to pressure suspects or demand explanations.'
+            : '',
         '',
         `ALIVE (${alive.length}): ${alive.map(p => clip(p.name, 32)).join(', ')}`,
         dead.length > 0 ? `ELIMINATED: ${dead.map(p => clip(p.name, 32)).join(', ')}` : '',
         '',
         'RECENT EVENTS:',
-        ...recentEvents.map(event => `- ${clip(event)}`),
+        ...recentEvents.map(event => `- ${event}`),
         ...(privateNotes.length
-            ? ['', 'YOUR PRIVATE NOTES:', ...privateNotes.map(note => `- ${clip(note)}`)]
+            ? ['', 'YOUR PRIVATE NOTES:', ...privateNotes.map(note => `- ${note}`)]
             : []),
     ];
     return lines.filter(l => l !== '').join('\n');
@@ -515,6 +518,29 @@ export async function generateDayMessage(game: GameState, player: PlayerState): 
     );
     logAIChoice(player, 'message', text || '(empty, using fallback)');
     return text || 'Not sure who to trust right now...';
+}
+
+// ─── Question reply ───────────────────────────────────────────────────────────
+
+/** Returns an immediate reply from the AI player to a specific question or direct address. */
+export async function generateAIReply(
+    game: GameState,
+    player: PlayerState,
+    askerName: string,
+    question: string
+): Promise<string> {
+    const model = pickModel(player);
+    const personality = getPersonality(player);
+    const ctx = buildContext(game, player);
+    logAIStart(game, player, model, 'question-reply');
+    logAIContext(player, ctx);
+    const text = await ask(
+        ctx,
+        `${askerName} just said to you: "${question.slice(0, 200)}"\nWrite ONE short reply (1–2 sentences) responding directly to what they said. Behavior style: ${personality.style} Be natural and conversational. Stay in character as a Mafia game player. Never break the fourth wall, reveal your role, or mention any special action you took at night. If your private notes contain role-action results, use them only to subtly inform your reasoning — never reference the action itself.`,
+        model
+    );
+    logAIChoice(player, 'reply', text || '(empty, using fallback)');
+    return text || 'Not sure what to say right now...';
 }
 
 // ─── Vote target ─────────────────────────────────────────────────────────────

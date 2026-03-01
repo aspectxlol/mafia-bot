@@ -181,20 +181,20 @@ describe('logEvent', () => {
         expect(game.gameLog).toEqual(['first', 'second', 'third']);
     });
 
-    it('caps the log at 30 entries, dropping oldest', () => {
+    it('caps the log at 60 entries, dropping oldest', () => {
         const game = makeGame();
-        for (let i = 1; i <= 35; i++) {
+        for (let i = 1; i <= 65; i++) {
             logEvent(game, `event ${i}`);
         }
-        expect(game.gameLog.length).toBe(30);
+        expect(game.gameLog.length).toBe(60);
         expect(game.gameLog[0]).toBe('event 6');
-        expect(game.gameLog[29]).toBe('event 35');
+        expect(game.gameLog[59]).toBe('event 65');
     });
 
-    it('does not exceed 30 after many inserts', () => {
+    it('does not exceed 60 after many inserts', () => {
         const game = makeGame();
         for (let i = 0; i < 100; i++) logEvent(game, `e${i}`);
-        expect(game.gameLog.length).toBe(30);
+        expect(game.gameLog.length).toBe(60);
     });
 });
 
@@ -697,6 +697,75 @@ describe('generateDayMessage', () => {
         const prompt = callArg.messages[0].content;
         expect(prompt).toContain('ELIMINATED: Alice');
         expect(prompt).not.toContain('ELIMINATED: Alice (was mafia)');
+    });
+});
+
+// ─── human messages in AI context ────────────────────────────────────────────
+
+describe('human messages in AI context (generateDayMessage)', () => {
+    it('includes human day-phase messages from gameLog in the Groq prompt', async () => {
+        const game = makeGame({
+            phase: 'day',
+            gameLog: [
+                '[Day 1] Alice: "I think Dave did it."',
+                '[Day 1] Bob: "Alice is acting really suspicious to me."',
+            ],
+        });
+        mockGroqResponse('I agree, Alice has been odd.');
+
+        await generateDayMessage(game, game.players['c1']);
+
+        const prompt = (mockGroqCreate.mock.calls[0][0] as { messages: { content: string }[] })
+            .messages[0].content;
+        expect(prompt).toContain('[Day 1] Alice: "I think Dave did it."');
+        expect(prompt).toContain('[Day 1] Bob: "Alice is acting really suspicious to me."');
+    });
+
+    it('includes all gameLog entries — not just the last 10', async () => {
+        // Previously only slice(-10) was used; now the full log is included.
+        const game = makeGame({ phase: 'day', gameLog: [] });
+        for (let i = 1; i <= 15; i++) {
+            logEvent(game, `[Day 1] Human${i}: "Message ${i}"`);
+        }
+        mockGroqResponse('Interesting...');
+
+        await generateDayMessage(game, game.players['c1']);
+
+        const prompt = (mockGroqCreate.mock.calls[0][0] as { messages: { content: string }[] })
+            .messages[0].content;
+        for (let i = 1; i <= 15; i++) {
+            expect(prompt).toContain(`[Day 1] Human${i}: "Message ${i}"`);
+        }
+    });
+
+    it('shows "Game just started." when no events have been logged yet', async () => {
+        const game = makeGame({ phase: 'day', gameLog: [] });
+        mockGroqResponse('Hard to say this early.');
+
+        await generateDayMessage(game, game.players['c1']);
+
+        const prompt = (mockGroqCreate.mock.calls[0][0] as { messages: { content: string }[] })
+            .messages[0].content;
+        expect(prompt).toContain('Game just started.');
+    });
+
+    it('keeps messages logged by logEvent in order in the prompt', async () => {
+        const game = makeGame({ phase: 'day', gameLog: [] });
+        logEvent(game, '[Day 1] Alice: "Who should we vote?"');
+        logEvent(game, '[Day 1] Bob: "I suspect Dave."');
+        logEvent(game, '[Day 1] Carol: "Bob is quiet, watch him."');
+        mockGroqResponse('I am watching closely.');
+
+        await generateDayMessage(game, game.players['c1']);
+
+        const prompt = (mockGroqCreate.mock.calls[0][0] as { messages: { content: string }[] })
+            .messages[0].content;
+        const alicePos = prompt.indexOf('[Day 1] Alice');
+        const bobPos = prompt.indexOf('[Day 1] Bob');
+        const carolPos = prompt.indexOf('[Day 1] Carol');
+        expect(alicePos).toBeGreaterThan(-1);
+        expect(bobPos).toBeGreaterThan(alicePos);
+        expect(carolPos).toBeGreaterThan(bobPos);
     });
 });
 

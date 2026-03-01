@@ -2,6 +2,7 @@ import {
     ChannelType,
     Client,
     EmbedBuilder,
+    Message,
     PermissionFlagsBits,
     TextChannel,
     time,
@@ -18,6 +19,7 @@ import {
     PlayerState,
 } from './gameState.js';
 import {
+    generateAIReply,
     generateDayMessage,
     isAIId,
     logEvent,
@@ -39,6 +41,10 @@ const VOTE_WARN_MS = 60 * 1000;
 const gameWebhooks = new Map<string, WebhookClient>();
 const resolvingNightGames = new Set<string>();
 const resolvingVoteGames = new Set<string>();
+
+// cooldown: each AI can only auto-reply to questions once per 60 s (prevents reply chains)
+const aiQuestionCooldowns = new Map<string, number>();
+const AI_QUESTION_COOLDOWN_MS = 60_000;
 
 /** Returns an avatar URL for an AI player using DiceBear bottts style. */
 function aiAvatarUrl(name: string): string {
@@ -67,6 +73,104 @@ async function getOrCreateWebhook(
         Logger.error('Failed to create AI webhook', err);
         return null;
     }
+}
+
+// ─── Question-reply handler (called by MessageHandler) ─────────────────────
+
+/**
+ * Core logic: scan `text` for questions directed at alive AI players and fire
+ * immediate replies. Works for both human and AI senders.
+ */
+function triggerAIQuestionReplies(
+    channelId: string,
+    channel: TextChannel,
+    askerName: string,
+    text: string
+): void {
+    const game = getGame(channelId);
+    if (!game || game.phase !== 'day') return;
+
+    const lowerText = text.toLowerCase();
+    const now = Date.now();
+
+    for (const player of Object.values(game.players)) {
+        if (!player.alive || !isAIId(player.id)) continue;
+
+        const nameLower = player.name.toLowerCase();
+        if (!lowerText.includes(nameLower)) continue;
+
+        // Only react to questions ('?') or direct address (starts with the name)
+        const isQuestion = text.includes('?');
+        const isDirectAddress =
+            lowerText.startsWith(nameLower) || lowerText.startsWith(`@${nameLower}`);
+        if (!isQuestion && !isDirectAddress) continue;
+
+        // Enforce cooldown
+        const key = `${channelId}:${player.id}`;
+        if (now - (aiQuestionCooldowns.get(key) ?? 0) < AI_QUESTION_COOLDOWN_MS) continue;
+        aiQuestionCooldowns.set(key, now);
+
+        const capturedPlayerId = player.id;
+        void (async () => {
+            const g = getGame(channelId);
+            if (!g || g.phase !== 'day') return;
+            const p = g.players[capturedPlayerId];
+            if (!p || !p.alive) return;
+
+            const webhook = await getOrCreateWebhook(channel, g.gameNumber);
+            let pendingWebhookId: string | null = null;
+
+            if (webhook) {
+                const pending = await webhook
+                    .send({
+                        content: '💭 thinking...',
+                        username: `${p.name} 🤖`,
+                        avatarURL: aiAvatarUrl(p.name),
+                    })
+                    .catch(() => null);
+                pendingWebhookId = pending?.id ?? null;
+            }
+
+            const reply = await generateAIReply(g, p, askerName, text);
+
+            if (webhook && pendingWebhookId) {
+                await webhook.editMessage(pendingWebhookId, { content: reply }).catch(() =>
+                    webhook
+                        .send({
+                            content: reply,
+                            username: `${p.name} 🤖`,
+                            avatarURL: aiAvatarUrl(p.name),
+                        })
+                        .catch(() => null)
+                );
+            } else if (webhook) {
+                await webhook
+                    .send({
+                        content: reply,
+                        username: `${p.name} 🤖`,
+                        avatarURL: aiAvatarUrl(p.name),
+                    })
+                    .catch(() => null);
+            } else {
+                await channel.send(`**${p.name} 🤖:** ${reply}`).catch(() => null);
+            }
+
+            const g2 = getGame(channelId);
+            if (g2) logEvent(g2, `[Day ${g2.round}] ${p.name}: "${reply}"`);
+        })().catch(err => Logger.error('AI question reply failed', err));
+    }
+}
+
+/**
+ * Called by MessageHandler for every human day-phase message.
+ */
+export function handleDayPlayerMessage(msg: Message): void {
+    const game = getGame(msg.channelId);
+    if (!game || game.phase !== 'day') return;
+    const text = msg.content?.trim() ?? '';
+    if (!text) return;
+    const askerName = game.players[msg.author.id]?.name ?? msg.author.username;
+    triggerAIQuestionReplies(msg.channelId, msg.channel as TextChannel, askerName, text);
 }
 
 // ─── DM helper ──────────────────────────────────────────────────────────────
@@ -547,7 +651,9 @@ export async function startDayPhase(game: GameState, client: Client): Promise<vo
             }
         }
         const gLog = getGame(game.gameChannelId);
-        if (gLog) logEvent(gLog, `[Day ${gLog.round}] ${p.name}: "${text.slice(0, 80)}"`);
+        if (gLog) logEvent(gLog, `[Day ${gLog.round}] ${p.name}: "${text}"`);
+        // Check if this AI message contains a question directed at another AI and trigger reply
+        if (text) triggerAIQuestionReplies(game.gameChannelId, channel, p.name, text);
         return text;
     }
 
