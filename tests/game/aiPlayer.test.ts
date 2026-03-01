@@ -626,6 +626,19 @@ describe('generateDayMessage', () => {
         expect(msg).toBe('Not sure who to trust right now...');
     });
 
+    it('strips <think> blocks and returns only final visible text', async () => {
+        const game = makeGame();
+        mockGroqResponse(
+            `<tool_call>Internal chain of thought that should not be shown. thinking about responding with "I’m still trying to figure things out. Should we focus on players avoiding questions?"<tool_call>\n\n"I’m still trying to figure things out. Should we focus on players avoiding questions?"`
+        );
+
+        const msg = await generateDayMessage(game, game.players['c1']);
+
+        expect(msg).toBe(
+            'I’m still trying to figure things out. Should we focus on players avoiding questions?'
+        );
+    });
+
     it('returns a non-empty string for any role', async () => {
         const game = makeGame();
         for (const player of Object.values(game.players)) {

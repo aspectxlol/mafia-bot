@@ -236,6 +236,14 @@ function buildContext(game: GameState, player: PlayerState): string {
 const MIN_RETRY_MS = 5_000; // never retry faster than 5 s
 const MAX_RETRIES = 3;
 const MAX_PARALLEL_AI_REQUESTS = 4;
+const IS_TEST_ENV =
+    process.env.NODE_ENV === 'test' ||
+    Boolean(process.env.VITEST) ||
+    Boolean(process.env.VITEST_WORKER_ID) ||
+    process.argv.some(arg => arg.toLowerCase().includes('vitest')) ||
+    process.env.npm_lifecycle_event === 'test' ||
+    process.env.npm_lifecycle_script?.toLowerCase().includes('vitest') === true;
+const QUEUE_ACTION_DELAY_MS = IS_TEST_ENV ? 0 : 10_000;
 
 type RequestTask<T> = {
     run: () => Promise<T>;
@@ -245,14 +253,32 @@ type RequestTask<T> = {
 
 const requestQueue: RequestTask<unknown>[] = [];
 let activeRequestCount = 0;
+let nextQueueStartAt = 0;
+
+function sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 function pumpRequestQueue(): void {
     while (activeRequestCount < MAX_PARALLEL_AI_REQUESTS && requestQueue.length > 0) {
         const task = requestQueue.shift();
         if (!task) return;
+
+        let waitMs = 0;
+        if (QUEUE_ACTION_DELAY_MS > 0) {
+            const now = Date.now();
+            waitMs = Math.max(0, nextQueueStartAt - now);
+            nextQueueStartAt = now + waitMs + QUEUE_ACTION_DELAY_MS;
+        }
+
         activeRequestCount++;
         Promise.resolve()
-            .then(task.run)
+            .then(async () => {
+                if (waitMs > 0) {
+                    await sleep(waitMs);
+                }
+                return task.run();
+            })
             .then(task.resolve)
             .catch(task.reject)
             .finally(() => {
@@ -293,6 +319,49 @@ function parseRetryDelay(err: unknown): number {
     return 60_000;
 }
 
+function cleanModelOutput(content: string): string {
+    const withoutToolCallBlocks = content
+        .replace(/<tool_call>[\s\S]*?<tool_call>/gi, '')
+        .replace(/<tool_call>/gi, '');
+
+    const withoutClosedThink = withoutToolCallBlocks.replace(/<think[\s\S]*?<\/think>/gi, '');
+    const withoutUnclosedThink = withoutClosedThink.replace(/<think[\s\S]*/gi, '');
+
+    let cleaned = withoutUnclosedThink.trim();
+
+    const nonEmptyLines = cleaned
+        .split('\n')
+        .map(line => line.trim())
+        .filter(Boolean);
+    const lastLine = nonEmptyLines[nonEmptyLines.length - 1];
+    if (lastLine) {
+        const quotedLine = lastLine.match(/^["“](.*)["”]$/s);
+        if (quotedLine?.[1]) {
+            cleaned = quotedLine[1].trim();
+        }
+    }
+
+    const quotePairs: Array<[string, string]> = [
+        ['"', '"'],
+        ["'", "'"],
+        ['“', '”'],
+        ['‘', '’'],
+    ];
+
+    for (const [open, close] of quotePairs) {
+        if (cleaned.startsWith(open) && cleaned.endsWith(close) && cleaned.length >= 2) {
+            cleaned = cleaned.slice(1, -1).trim();
+            break;
+        }
+    }
+
+    if (cleaned.length > 1000) {
+        cleaned = `${cleaned.slice(0, 999)}…`;
+    }
+
+    return cleaned;
+}
+
 async function ask(context: string, task: string, model: string): Promise<string> {
     const prompt = `${context}\n\nTASK: ${task}\n\nRespond with ONLY what is asked. No extra explanation.`;
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
@@ -305,10 +374,7 @@ async function ask(context: string, task: string, model: string): Promise<string
                     temperature: 0.8,
                 })
             );
-            const raw = (completion.choices[0]?.message?.content ?? '')
-                .replace(/grounded[\s\S]*?<\/think>/gi, '') // strip complete think blocks
-                .replace(/grounded[\s\S]*/i, '') // strip truncated (unclosed) think block
-                .trim();
+            const raw = cleanModelOutput(completion.choices[0]?.message?.content ?? '');
             return raw;
         } catch (err) {
             const status = (err as Record<string, unknown>).status;
