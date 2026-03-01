@@ -82,6 +82,14 @@ export class VoteCommand implements Command {
         }
 
         const previousVote = game.vote.votes[intr.user.id];
+
+        if (previousVote === targetId) {
+            await intr.editReply(
+                `ℹ️ You have already voted for **${targetPlayer.name}**. No change needed.`
+            );
+            return;
+        }
+
         game.vote.votes[intr.user.id] = targetId;
 
         if (previousVote && previousVote !== targetId) {

@@ -42,10 +42,9 @@ export class InvestigateCommand implements Command {
         }
 
         if (game.night.actionsReceived.includes('investigate')) {
-            await intr.editReply(
-                '❌ You have already submitted your investigation for this night.'
-            );
-            return;
+            // Allow changing target — remove old action so it can be re-submitted
+            const idx = game.night.actionsReceived.indexOf('investigate');
+            if (idx !== -1) game.night.actionsReceived.splice(idx, 1);
         }
 
         const targetUser = intr.options.getUser('target', false);
@@ -94,7 +93,7 @@ export class InvestigateCommand implements Command {
         game.night.actionsReceived.push('investigate');
 
         await intr.editReply(
-            `✅ You will investigate **${targetPlayer.name}** tonight. Your result will arrive at the end of the night.`
+            `✅ You will investigate **${targetPlayer.name}** tonight. You can change this before the night ends.`
         );
 
         // Check if all night actions are received — resolve early if so

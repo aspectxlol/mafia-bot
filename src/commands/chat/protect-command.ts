@@ -42,8 +42,13 @@ export class ProtectCommand implements Command {
         }
 
         if (game.night.actionsReceived.includes('protect')) {
-            await intr.editReply('❌ You have already submitted your protection for this night.');
-            return;
+            // Allow changing target — undo previous self-protect flag if applicable
+            const prevTarget = game.night.protectTarget;
+            if (prevTarget === intr.user.id) {
+                doctor.selfProtectUsed = false; // Undo the self-protect flag
+            }
+            const idx = game.night.actionsReceived.indexOf('protect');
+            if (idx !== -1) game.night.actionsReceived.splice(idx, 1);
         }
 
         const targetUser = intr.options.getUser('target', false);
@@ -97,13 +102,19 @@ export class ProtectCommand implements Command {
                 await intr.editReply('❌ You have already used your self-protect this game.');
                 return;
             }
-            doctor.selfProtectUsed = true;
         }
 
         game.night.protectTarget = targetId;
         game.night.actionsReceived.push('protect');
 
-        await intr.editReply(`✅ You will protect **${targetPlayer.name}** tonight.`);
+        // Set self-protect flag AFTER action is committed
+        if (targetId === intr.user.id) {
+            doctor.selfProtectUsed = true;
+        }
+
+        await intr.editReply(
+            `✅ You will protect **${targetPlayer.name}** tonight. You can change this before the night ends.`
+        );
 
         // Check if all night actions are received — resolve early if so
         const alive = Object.values(game.players).filter(p => p.alive);

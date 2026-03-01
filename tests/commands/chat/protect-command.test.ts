@@ -71,6 +71,7 @@ function makeGame(overrides: Partial<GameState> = {}): GameState {
         lastNightSaved: false,
         gameLog: [],
         playerLogs: {},
+        aiTimers: [],
         ...overrides,
     };
 }
@@ -131,14 +132,23 @@ describe('ProtectCommand', () => {
         expect(intr.editReply).toHaveBeenCalledWith(expect.stringContaining('Doctor'));
     });
 
-    it('rejects duplicate protect submission in the same night', async () => {
+    it('allows changing protection target in the same night', async () => {
         const game = makeGame({
-            night: { ...createNightState(), actionsReceived: ['protect'] },
+            night: {
+                ...createNightState(),
+                actionsReceived: ['protect'],
+                protectTarget: 'c1',
+            },
         });
         setGame(GAME_CH, game);
-        const intr = makeIntr({ user: { id: 'doc' }, guild: null });
+        const intr = makeIntr({
+            user: { id: 'doc' },
+            guild: null,
+            targetUser: { id: 'm1' },
+        });
         await cmd.execute(intr as any, null as any);
-        expect(intr.editReply).toHaveBeenCalledWith(expect.stringContaining('already submitted'));
+        expect(intr.editReply).toHaveBeenCalledWith(expect.stringContaining('protect'));
+        expect(game.night.protectTarget).toBe('m1');
     });
 
     it('rejects when target is not in the game', async () => {

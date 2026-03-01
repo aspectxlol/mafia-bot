@@ -59,6 +59,7 @@ function gameWithNPlayers(n: number): GameState {
         lastNightSaved: false,
         gameLog: [],
         playerLogs: {},
+        aiTimers: [],
     };
 }
 

@@ -1,21 +1,16 @@
 import {
     ChatInputCommandInteraction,
     EmbedBuilder,
+    PermissionFlagsBits,
     PermissionsString,
     TextChannel,
 } from 'discord.js';
 
-import {
-    clearTimers,
-    deleteGame,
-    getAllGames,
-    getGame,
-    getGameByUser,
-} from '../../game/gameState.js';
+import { clearTimers, deleteGame, getAllGames, getGame } from '../../game/gameState.js';
+import { cleanupGameWebhook } from '../../game/phases.js';
 import { Language } from '../../models/enum-helpers/index.js';
 import { EventData } from '../../models/internal-models.js';
 import { Lang } from '../../services/index.js';
-import { InteractionUtils } from '../../utils/index.js';
 import { Command, CommandDeferType } from '../index.js';
 
 export class EndCommand implements Command {
@@ -25,13 +20,15 @@ export class EndCommand implements Command {
 
     public async execute(intr: ChatInputCommandInteraction, _data: EventData): Promise<void> {
         // Find the game this host is associated with
+        // Prioritize: game channel → game hosted by user → any game hosted by user in guild
+        const channelGame = getGame(intr.channelId);
         const game =
-            getGame(intr.channelId) ??
-            getGameByUser(intr.user.id) ??
+            channelGame ??
+            getAllGames().find(g => g.hostId === intr.user.id && g.phase !== 'ended') ??
             (intr.guild
                 ? getAllGames().find(
                       g =>
-                          g.guildId === intr.guild.id &&
+                          g.guildId === intr.guild!.id &&
                           g.hostId === intr.user.id &&
                           g.phase !== 'ended'
                   )
@@ -83,8 +80,43 @@ export class EndCommand implements Command {
             }
         }
 
+        // Archive game channel (read-only)
+        try {
+            const gameChannel = (await intr.client.channels
+                .fetch(game.gameChannelId)
+                .catch(() => null)) as TextChannel | null;
+            if (gameChannel) {
+                await gameChannel.permissionOverwrites.set([
+                    {
+                        id: gameChannel.guild.roles.everyone.id,
+                        allow: [
+                            PermissionFlagsBits.ViewChannel,
+                            PermissionFlagsBits.ReadMessageHistory,
+                        ],
+                        deny: [PermissionFlagsBits.SendMessages],
+                    },
+                    {
+                        id: intr.client.user!.id,
+                        allow: [
+                            PermissionFlagsBits.ViewChannel,
+                            PermissionFlagsBits.SendMessages,
+                            PermissionFlagsBits.ReadMessageHistory,
+                        ],
+                    },
+                ]);
+                await gameChannel.setTopic(
+                    `Mafia Game #${game.gameNumber} — ARCHIVED | Force-ended`
+                );
+            }
+        } catch {
+            // Ignore permission errors
+        }
+
+        // Cleanup webhook
+        cleanupGameWebhook(game.gameChannelId);
+
         deleteGame(game.gameChannelId);
 
-        await InteractionUtils.send(intr, `✅ Game #${game.gameNumber} has been ended.`, true);
+        await intr.editReply(`✅ Game #${game.gameNumber} has been ended.`);
     }
 }

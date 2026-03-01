@@ -78,6 +78,11 @@ export class KillCommand implements Command {
             return;
         }
 
+        if (targetPlayer.role === 'mafia') {
+            await intr.editReply('❌ You cannot target a fellow Mafia member.');
+            return;
+        }
+
         // Set kill target (overrides previous entry from any mafia member)
         game.night.killTarget = targetId;
 

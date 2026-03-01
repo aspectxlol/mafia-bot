@@ -42,6 +42,16 @@ const gameWebhooks = new Map<string, WebhookClient>();
 const resolvingNightGames = new Set<string>();
 const resolvingVoteGames = new Set<string>();
 
+/** Cleanup the webhook for a game channel (for use by /end command). */
+export function cleanupGameWebhook(gameChannelId: string): void {
+    const hook = gameWebhooks.get(gameChannelId);
+    if (hook) {
+        hook.delete('Game ended').catch(() => {});
+        hook.destroy();
+        gameWebhooks.delete(gameChannelId);
+    }
+}
+
 // cooldown: each AI can only auto-reply to questions once per 60 s (prevents reply chains)
 const aiQuestionCooldowns = new Map<string, number>();
 const AI_QUESTION_COOLDOWN_MS = 60_000;
@@ -192,7 +202,22 @@ export async function sendDM(
 }
 
 // ─── Launch (lobby → night) ─────────────────────────────────────────────────
+const launchingGames = new Set<string>();
+
 export async function launchGame(game: GameState, client: Client): Promise<void> {
+    // Re-entry guard: prevent double-launch from concurrent ready/force-start clicks
+    if (game.phase !== 'lobby') return;
+    if (launchingGames.has(game.gameChannelId)) return;
+    launchingGames.add(game.gameChannelId);
+
+    try {
+        await launchGameInner(game, client);
+    } finally {
+        launchingGames.delete(game.gameChannelId);
+    }
+}
+
+async function launchGameInner(game: GameState, client: Client): Promise<void> {
     clearTimers(game);
 
     const playerIds = Object.keys(game.players);
@@ -678,11 +703,12 @@ export async function startDayPhase(game: GameState, client: Client): Promise<vo
         const count = randomMsgCount();
         for (let i = 0; i < count; i++) {
             const delay = Math.floor(Math.random() * safeWindowMs);
-            setTimeout(() => {
+            const timerId = setTimeout(() => {
                 sendOneAIMessage(aiPlayer.id).catch(err =>
                     Logger.error('AI day message failed', err)
                 );
             }, delay);
+            game.aiTimers.push(timerId);
         }
     }
     void dayStart; // suppress unused-var warning

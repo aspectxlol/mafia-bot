@@ -45,6 +45,7 @@ export interface GameState {
     lastNightSaved: boolean; // true if doctor prevented a kill
     gameLog: string[]; // public event log for AI context (all players see this)
     playerLogs: Record<string, string[]>; // per-player private logs keyed by player ID
+    aiTimers: ReturnType<typeof setTimeout>[]; // AI day message timers
 }
 
 let gameCounter = 0;
@@ -105,5 +106,9 @@ export function clearTimers(game: GameState): void {
     if (game.reminderTimer) {
         clearTimeout(game.reminderTimer);
         game.reminderTimer = null;
+    }
+    if (game.aiTimers) {
+        for (const t of game.aiTimers) clearTimeout(t);
+        game.aiTimers = [];
     }
 }

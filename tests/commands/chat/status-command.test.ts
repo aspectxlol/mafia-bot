@@ -71,6 +71,7 @@ function makeGame(channelId: string, overrides: Partial<GameState> = {}): GameSt
         lastNightSaved: false,
         gameLog: [],
         playerLogs: {},
+        aiTimers: [],
         ...overrides,
     };
 }

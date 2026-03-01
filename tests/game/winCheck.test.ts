@@ -45,6 +45,7 @@ function makeGame(players: Record<string, PlayerState>): GameState {
         lastNightSaved: false,
         gameLog: [],
         playerLogs: {},
+        aiTimers: [],
     };
 }
 

@@ -19,7 +19,7 @@ export class StatusCommand implements Command {
             getGame(intr.channelId) ??
             getGameByUser(intr.user.id) ??
             (intr.guild
-                ? getAllGames().find(g => g.guildId === intr.guild.id && g.phase !== 'ended')
+                ? getAllGames().find(g => g.guildId === intr.guild!.id && g.phase !== 'ended')
                 : undefined);
 
         if (!game) {

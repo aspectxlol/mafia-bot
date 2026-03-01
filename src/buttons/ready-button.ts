@@ -38,8 +38,9 @@ export class ReadyButton implements Button {
             }
 
             game.readyPlayers.add(intr.user.id);
-            const total = Object.keys(game.players).length;
-            const ready = game.readyPlayers.size;
+            const humanPlayers = Object.values(game.players).filter(p => !p.isAI);
+            const total = humanPlayers.length;
+            const ready = humanPlayers.filter(p => game.readyPlayers.has(p.id)).length;
 
             await intr.reply({
                 content: `✅ You're ready! (**${ready}/${total}** ready)`,

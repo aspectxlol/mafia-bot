@@ -12,6 +12,9 @@ vi.mock('../../../src/utils/index.js', () => ({
     FormatUtils: {},
     CommandUtils: {},
 }));
+vi.mock('../../../src/game/phases.js', () => ({
+    cleanupGameWebhook: vi.fn(),
+}));
 vi.mock('../../../config/config.json', () => ({}));
 vi.mock('../../../config/debug.json', () => ({}));
 vi.mock('../../../lang/logs.json', () => ({}));
@@ -71,6 +74,7 @@ function makeGame(overrides: Partial<GameState> = {}): GameState {
         lastNightSaved: false,
         gameLog: [],
         playerLogs: {},
+        aiTimers: [],
         ...overrides,
     };
 }
@@ -191,16 +195,12 @@ describe('EndCommand', () => {
         expect(mockMafiaChannel.delete).toHaveBeenCalled();
     });
 
-    it('sends success confirmation via InteractionUtils', async () => {
+    it('sends success confirmation via editReply', async () => {
         const game = makeGame();
         setGame(GAME_CH, game);
         const intr = makeIntr({ channelId: GAME_CH, user: { id: 'host1' } });
         await cmd.execute(intr as any, null as any);
-        expect(InteractionUtils.send).toHaveBeenCalledWith(
-            intr,
-            expect.stringContaining('ended'),
-            true
-        );
+        expect(intr.editReply).toHaveBeenCalledWith(expect.stringContaining('ended'));
     });
 
     it('finds the game by user id when not in the game channel', async () => {

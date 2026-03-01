@@ -74,6 +74,7 @@ function makeGame(overrides: Partial<GameState> = {}): GameState {
         lastNightSaved: false,
         gameLog: [],
         playerLogs: {},
+        aiTimers: [],
         ...overrides,
     };
 }

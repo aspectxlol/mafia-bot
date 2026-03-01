@@ -67,6 +67,16 @@ export class StartCommand implements Command {
             }
         }
 
+        // Check if any mentioned players are already in an active game
+        const busyPlayers = uniqueUsers.filter(u => u.id !== intr.user.id && getGameByUser(u.id));
+        if (busyPlayers.length > 0) {
+            const names = busyPlayers.map(u => `<@${u.id}>`).join(', ');
+            await intr.editReply(
+                `❌ The following player(s) are already in an active game: ${names}`
+            );
+            return;
+        }
+
         const totalPlayers = uniqueUsers.length + aiCount;
         if (totalPlayers < 5 || totalPlayers > 8) {
             await intr.editReply(
@@ -186,6 +196,7 @@ export class StartCommand implements Command {
             lastNightSaved: false,
             gameLog: [],
             playerLogs: {},
+            aiTimers: [],
         };
 
         setGame(gameChannel.id, gameState);

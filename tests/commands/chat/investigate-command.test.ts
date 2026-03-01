@@ -71,6 +71,7 @@ function makeGame(overrides: Partial<GameState> = {}): GameState {
         lastNightSaved: false,
         gameLog: [],
         playerLogs: {},
+        aiTimers: [],
         ...overrides,
     };
 }
@@ -133,14 +134,24 @@ describe('InvestigateCommand', () => {
         expect(intr.editReply).toHaveBeenCalledWith(expect.stringContaining('Detective'));
     });
 
-    it('rejects duplicate investigation in the same night', async () => {
+    it('allows changing investigation target in the same night', async () => {
         const game = makeGame({
-            night: { ...createNightState(), actionsReceived: ['investigate'] },
+            night: {
+                ...createNightState(),
+                actionsReceived: ['investigate'],
+                investigateTarget: 'c1',
+            },
         });
         setGame(GAME_CH, game);
-        const intr = makeIntr({ channelId: 'dmch', user: { id: 'det' }, guild: null });
+        const intr = makeIntr({
+            channelId: 'dmch',
+            user: { id: 'det' },
+            guild: null,
+            targetUser: { id: 'doc' },
+        });
         await cmd.execute(intr as any, null as any);
-        expect(intr.editReply).toHaveBeenCalledWith(expect.stringContaining('already submitted'));
+        expect(intr.editReply).toHaveBeenCalledWith(expect.stringContaining('investigate'));
+        expect(game.night.investigateTarget).toBe('doc');
     });
 
     it('rejects self-investigation', async () => {
