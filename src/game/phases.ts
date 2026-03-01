@@ -306,6 +306,18 @@ export async function startNightPhase(game: GameState, client: Client): Promise<
             const p = g.players[aiPlayer.id];
             if (!p || !p.alive) return;
             await runAINightAction(g, p);
+            // Resolve immediately if all expected night actions are now in
+            const g2 = getGame(game.gameChannelId);
+            if (!g2 || g2.phase !== 'night') return;
+            const alive2 = Object.values(g2.players).filter(p2 => p2.alive);
+            const allDone =
+                (!alive2.some(p2 => p2.role === 'mafia') ||
+                    g2.night.actionsReceived.includes('kill')) &&
+                (!alive2.some(p2 => p2.role === 'detective') ||
+                    g2.night.actionsReceived.includes('investigate')) &&
+                (!alive2.some(p2 => p2.role === 'doctor') ||
+                    g2.night.actionsReceived.includes('protect'));
+            if (allDone) await resolveNight(g2, client);
         })().catch(err => Logger.error('AI night action failed', err));
     }
 

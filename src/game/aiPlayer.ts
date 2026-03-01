@@ -123,16 +123,6 @@ function colorForPlayer(player: PlayerState): string {
     return aiColor(player.name);
 }
 
-function summarizeContext(context: string, maxLines = 8): string {
-    const lines = context
-        .split('\n')
-        .map(line => line.trim())
-        .filter(Boolean);
-    if (lines.length <= maxLines) return lines.join('\n');
-    const shown = lines.slice(0, maxLines).join('\n');
-    return `${shown}\n… (${lines.length - maxLines} more lines)`;
-}
-
 function logAIStart(game: GameState, player: PlayerState, model: string, action: string): void {
     const color = colorForPlayer(player);
     const personality = getPersonality(player);
@@ -147,8 +137,8 @@ function logAIStart(game: GameState, player: PlayerState, model: string, action:
 
 function logAIContext(player: PlayerState, context: string): void {
     const color = colorForPlayer(player);
-    console.log(`${color}[AI] context preview:${RESET}`);
-    console.log(`${color}${summarizeContext(context)}${RESET}`);
+    console.log(`${color}[AI] context:${RESET}`);
+    console.log(`${color}${context}${RESET}`);
 }
 
 function logAIChoice(player: PlayerState, label: string, value: string): void {
