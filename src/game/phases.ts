@@ -477,72 +477,86 @@ export async function startDayPhase(game: GameState, client: Client): Promise<vo
     // ── AI day messages ──────────────────────────────────────────────────────
     const aiAlive = alivePlayers.filter(p => isAIId(p.id));
     const webhook = aiAlive.length > 0 ? await getOrCreateWebhook(channel, game.gameNumber) : null;
-    for (const aiPlayer of aiAlive) {
-        const msgCount = 1 + (Math.random() < 0.5 ? 1 : 0);
-        for (let i = 0; i < msgCount; i++) {
-            void (async () => {
-                const g = getGame(game.gameChannelId);
-                if (!g || g.phase !== 'day') return;
-                const p = g.players[aiPlayer.id];
-                if (!p || !p.alive) return;
 
-                let pendingChannelMessage: { edit: (content: string) => Promise<unknown> } | null =
-                    null;
-                let pendingWebhookMessageId: string | null = null;
+    /** Sends one AI day message for the given player ID. Returns the sent text, or null if aborted. */
+    async function sendOneAIMessage(aiPlayerId: string): Promise<string | null> {
+        const g = getGame(game.gameChannelId);
+        if (!g || g.phase !== 'day') return null;
+        const p = g.players[aiPlayerId];
+        if (!p || !p.alive) return null;
 
-                if (webhook) {
-                    const pending = await webhook
+        let pendingChannelMessage: { edit: (content: string) => Promise<unknown> } | null = null;
+        let pendingWebhookMessageId: string | null = null;
+
+        if (webhook) {
+            const pending = await webhook
+                .send({
+                    content: '💭 thinking...',
+                    username: `${p.name} 🤖`,
+                    avatarURL: aiAvatarUrl(p.name),
+                })
+                .catch(() => null);
+            pendingWebhookMessageId = pending?.id ?? null;
+        } else {
+            pendingChannelMessage = await channel
+                .send(`**${p.name} 🤖:** _thinking..._`)
+                .catch(() => null);
+        }
+
+        const text = await generateDayMessage(g, p);
+
+        if (webhook) {
+            if (pendingWebhookMessageId) {
+                await webhook.editMessage(pendingWebhookMessageId, { content: text }).catch(() =>
+                    webhook
                         .send({
-                            content: '💭 thinking...',
+                            content: text,
                             username: `${p.name} 🤖`,
                             avatarURL: aiAvatarUrl(p.name),
                         })
-                        .catch(() => null);
-                    pendingWebhookMessageId = pending?.id ?? null;
-                } else {
-                    pendingChannelMessage = await channel
-                        .send(`**${p.name} 🤖:** _thinking..._`)
-                        .catch(() => null);
-                }
-
-                const text = await generateDayMessage(g, p);
-
-                if (webhook) {
-                    if (pendingWebhookMessageId) {
-                        await webhook
-                            .editMessage(pendingWebhookMessageId, { content: text })
-                            .catch(() =>
-                                webhook
-                                    .send({
-                                        content: text,
-                                        username: `${p.name} 🤖`,
-                                        avatarURL: aiAvatarUrl(p.name),
-                                    })
-                                    .catch(() => channel.send(text).catch(() => null))
-                            );
-                    } else {
-                        await webhook
-                            .send({
-                                content: text,
-                                username: `${p.name} 🤖`,
-                                avatarURL: aiAvatarUrl(p.name),
-                            })
-                            .catch(() => channel.send(text).catch(() => null));
-                    }
-                } else {
-                    if (pendingChannelMessage) {
-                        await pendingChannelMessage
-                            .edit(`**${p.name} 🤖:** ${text}`)
-                            .catch(() =>
-                                channel.send(`**${p.name} 🤖:** ${text}`).catch(() => null)
-                            );
-                    } else {
-                        await channel.send(`**${p.name} 🤖:** ${text}`).catch(() => null);
-                    }
-                }
-                logEvent(g, `[Day ${g.round}] ${p.name}: "${text.slice(0, 80)}"`);
-            })().catch(err => Logger.error('AI day message failed', err));
+                        .catch(() => channel.send(text).catch(() => null))
+                );
+            } else {
+                await webhook
+                    .send({
+                        content: text,
+                        username: `${p.name} 🤖`,
+                        avatarURL: aiAvatarUrl(p.name),
+                    })
+                    .catch(() => channel.send(text).catch(() => null));
+            }
+        } else {
+            if (pendingChannelMessage) {
+                await pendingChannelMessage
+                    .edit(`**${p.name} 🤖:** ${text}`)
+                    .catch(() => channel.send(`**${p.name} 🤖:** ${text}`).catch(() => null));
+            } else {
+                await channel.send(`**${p.name} 🤖:** ${text}`).catch(() => null);
+            }
         }
+        const gLog = getGame(game.gameChannelId);
+        if (gLog) logEvent(gLog, `[Day ${gLog.round}] ${p.name}: "${text.slice(0, 80)}"`);
+        return text;
+    }
+
+    // Each AI sends an initial message then keeps chiming in throughout the day.
+    // Between messages: wait 40–90 s. Stop when the phase ends or < 20 s remain.
+    const dayEnd = Date.now() + DAY_MS;
+    for (const aiPlayer of aiAlive) {
+        // Stagger first messages so they don't all appear simultaneously.
+        const initialDelay = Math.floor(Math.random() * 15_000); // 0–15 s
+        void (async () => {
+            await new Promise<void>(res => setTimeout(res, initialDelay));
+            while (true) {
+                if (Date.now() > dayEnd - 20_000) break; // too close to vote phase
+                const text = await sendOneAIMessage(aiPlayer.id);
+                if (text === null) break; // phase changed or player died
+                // Wait 40–90 s before next message, but skip if it would land after the phase ends.
+                const betweenMs = 40_000 + Math.floor(Math.random() * 50_000);
+                if (Date.now() + betweenMs > dayEnd - 20_000) break;
+                await new Promise<void>(res => setTimeout(res, betweenMs));
+            }
+        })().catch(err => Logger.error('AI day message failed', err));
     }
 
     game.phaseTimer = setTimeout(async () => {

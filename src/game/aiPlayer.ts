@@ -255,6 +255,12 @@ const requestQueue: RequestTask<unknown>[] = [];
 let activeRequestCount = 0;
 let nextQueueStartAt = 0;
 
+/**
+ * Per-game guard: tracks games where a mafia kill AI query is already in-flight.
+ * Prevents the second mafia member from making a redundant Groq API call.
+ */
+const mafiaKillQuerying = new Set<string>();
+
 function sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -419,24 +425,32 @@ export async function runAINightAction(game: GameState, player: PlayerState): Pr
 
     if (player.role === 'mafia') {
         if (game.night.actionsReceived.includes('kill')) return;
-        const targets = alive.filter(p => p.role !== 'mafia' && p.id !== player.id);
-        if (targets.length === 0) return;
-        logAICandidates(
-            player,
-            'kill candidates',
-            targets.map(p => p.name)
-        );
-        const raw = await ask(
-            ctx,
-            `It is night. Choose one Town player to eliminate. Options: ${targets.map(p => p.name).join(', ')}. Personality guidance: ${personality.strategy}. Reply with only the player's exact name.`,
-            model
-        );
-        if (game.night.actionsReceived.includes('kill')) return;
-        const target = pickFromList(raw, targets);
-        logAIChoice(player, 'chose kill target', target.name);
-        game.night.killTarget = target.id;
-        if (!game.night.actionsReceived.includes('kill')) {
-            game.night.actionsReceived.push('kill');
+        // Prevent a second concurrent mafia member from also calling ask() — only the
+        // first one through this gate makes the API request; the other returns early.
+        if (mafiaKillQuerying.has(game.gameChannelId)) return;
+        mafiaKillQuerying.add(game.gameChannelId);
+        try {
+            const targets = alive.filter(p => p.role !== 'mafia' && p.id !== player.id);
+            if (targets.length === 0) return;
+            logAICandidates(
+                player,
+                'kill candidates',
+                targets.map(p => p.name)
+            );
+            const raw = await ask(
+                ctx,
+                `It is night. Choose one Town player to eliminate. Options: ${targets.map(p => p.name).join(', ')}. Personality guidance: ${personality.strategy}. Reply with only the player's exact name.`,
+                model
+            );
+            if (game.night.actionsReceived.includes('kill')) return;
+            const target = pickFromList(raw, targets);
+            logAIChoice(player, 'chose kill target', target.name);
+            game.night.killTarget = target.id;
+            if (!game.night.actionsReceived.includes('kill')) {
+                game.night.actionsReceived.push('kill');
+            }
+        } finally {
+            mafiaKillQuerying.delete(game.gameChannelId);
         }
     } else if (player.role === 'detective') {
         if (game.night.actionsReceived.includes('investigate')) return;
@@ -506,7 +520,7 @@ export async function generateDayMessage(game: GameState, player: PlayerState): 
     logAIContext(player, ctx);
     const text = await ask(
         ctx,
-        `It is the day discussion phase. Write ONE short message (1–2 sentences) as a player trying to figure out who the Mafia is. Behavior style: ${personality.style} Ask/accuse style: ${personality.voting} Be natural and conversational. Never break the fourth wall or reveal your role directly.`,
+        `It is the day discussion phase. Write ONE short message (1–2 sentences) as a player trying to figure out who the Mafia is. Behavior style: ${personality.style} Ask/accuse style: ${personality.voting} Be natural and conversational. Never break the fourth wall, reveal your role, or mention any special action you took at night. If your private notes contain role-action results (e.g. investigations or protections), use them only to subtly inform your reasoning — never reference the action itself, its outcome, or hint that you have special information.`,
         model
     );
     logAIChoice(player, 'message', text || '(empty, using fallback)');
